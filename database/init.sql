@@ -1,226 +1,264 @@
--- InsureFlow Database Initialization Script
--- Matches InsureFlow System Architecture Section 5
+-- ============================================================
+-- InsureFlow Local PostgreSQL Full Schema Setup
+-- Run this AFTER creating the database and user via pgAdmin or psql
+--
+-- In pgAdmin: open Query Tool on "insureflow" database → paste → Run (F5)
+-- In psql:    \c insureflow   then   \i path/to/this/file.sql
+-- ============================================================
 
+-- Enable UUID extension
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
--- 1. USERS TABLE
+-- ============================================================
+-- TABLE: users
+-- ============================================================
 CREATE TABLE IF NOT EXISTS users (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    email VARCHAR(255) UNIQUE NOT NULL,
-    password_hash VARCHAR(255) NOT NULL,
-    first_name VARCHAR(100) NOT NULL,
-    last_name VARCHAR(100) NOT NULL,
-    date_of_birth DATE,
-    phone VARCHAR(30),
-    role VARCHAR(30) NOT NULL DEFAULT 'CUSTOMER', -- 'CUSTOMER', 'ADMIN', 'OPERATIONS'
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  email           VARCHAR(255) UNIQUE NOT NULL,
+  password_hash   VARCHAR(255) NOT NULL,
+  first_name      VARCHAR(100) NOT NULL,
+  last_name       VARCHAR(100) NOT NULL,
+  date_of_birth   DATE NOT NULL,
+  phone           VARCHAR(30),
+  aadhar_number   VARCHAR(20) UNIQUE,
+  role            VARCHAR(20) NOT NULL DEFAULT 'CUSTOMER'
+                    CHECK (role IN ('CUSTOMER','ADMIN','OPERATIONS')),
+  is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 2. CLIENTS TABLE (Bank partners)
-CREATE TABLE IF NOT EXISTS clients (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    name VARCHAR(255) NOT NULL,
-    code VARCHAR(50) UNIQUE NOT NULL,
-    contact_email VARCHAR(255),
-    is_active BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
--- 3. PRODUCTS TABLE
+-- ============================================================
+-- TABLE: products
+-- ============================================================
 CREATE TABLE IF NOT EXISTS products (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    name VARCHAR(255) NOT NULL,
-    code VARCHAR(10) UNIQUE NOT NULL, -- 'DD', 'HP', 'RC'
-    description TEXT,
-    status VARCHAR(30) NOT NULL DEFAULT 'ACTIVE', -- 'FLAGSHIP', 'ACTIVE', 'COMING_SOON'
-    free_basic_enabled BOOLEAN DEFAULT FALSE,
-    free_basic_min DECIMAL(12, 2) DEFAULT 0.00,
-    free_basic_max DECIMAL(12, 2) DEFAULT 0.00,
-    premium_rate_per_thousand DECIMAL(6, 2) DEFAULT 0.60,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  code        VARCHAR(20) UNIQUE NOT NULL,
+  name        VARCHAR(200) NOT NULL,
+  description TEXT,
+  is_active   BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 4. CAMPAIGNS TABLE
-CREATE TABLE IF NOT EXISTS campaigns (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    client_id UUID REFERENCES clients(id) ON DELETE CASCADE,
-    product_id UUID REFERENCES products(id) ON DELETE CASCADE,
-    campaign_id VARCHAR(100) UNIQUE NOT NULL,
-    name VARCHAR(255) NOT NULL,
-    status VARCHAR(30) NOT NULL DEFAULT 'PLANNED', -- 'PLANNED', 'ACTIVE', 'COMPLETED'
-    start_date DATE,
-    end_date DATE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
--- 5. CAMPAIGN_EVENTS TABLE
-CREATE TABLE IF NOT EXISTS campaign_events (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    campaign_id UUID REFERENCES campaigns(id) ON DELETE CASCADE,
-    event_id VARCHAR(100) UNIQUE NOT NULL,
-    channel VARCHAR(50) NOT NULL, -- 'DIRECT_MAIL', 'DIGITAL'
-    send_date DATE,
-    quantity INT DEFAULT 0,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
--- 6. SEGMENTS TABLE
+-- ============================================================
+-- TABLE: segments
+-- ============================================================
 CREATE TABLE IF NOT EXISTS segments (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    event_id UUID REFERENCES campaign_events(id) ON DELETE CASCADE,
-    name VARCHAR(255) NOT NULL,
-    target_count INT DEFAULT 0,
-    description TEXT
+  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  name        VARCHAR(100) NOT NULL,
+  description TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 7. CAMPAIGN_CODES TABLE
+-- ============================================================
+-- TABLE: campaigns
+-- ============================================================
+CREATE TABLE IF NOT EXISTS campaigns (
+  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  name        VARCHAR(200) NOT NULL,
+  product_id  UUID NOT NULL REFERENCES products(id),
+  segment_id  UUID REFERENCES segments(id),
+  status      VARCHAR(20) NOT NULL DEFAULT 'ACTIVE'
+                CHECK (status IN ('DRAFT','ACTIVE','PAUSED','COMPLETED','CANCELLED')),
+  start_date  DATE,
+  end_date    DATE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ============================================================
+-- TABLE: campaign_codes
+-- ============================================================
 CREATE TABLE IF NOT EXISTS campaign_codes (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    campaign_id UUID REFERENCES campaigns(id) ON DELETE CASCADE,
-    code VARCHAR(100) UNIQUE NOT NULL,
-    is_used BOOLEAN DEFAULT FALSE,
-    used_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-    used_at TIMESTAMP WITH TIME ZONE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+  id               UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  campaign_id      UUID NOT NULL REFERENCES campaigns(id),
+  code             VARCHAR(50) UNIQUE NOT NULL,
+  is_used          BOOLEAN NOT NULL DEFAULT FALSE,
+  used_by_user_id  UUID REFERENCES users(id),
+  used_at          TIMESTAMPTZ,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 8. POLICIES TABLE (Owned by Jitendra)
+-- ============================================================
+-- TABLE: clients
+-- ============================================================
+CREATE TABLE IF NOT EXISTS clients (
+  id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id      UUID NOT NULL REFERENCES users(id),
+  segment_id   UUID REFERENCES segments(id),
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ============================================================
+-- TABLE: policies
+-- ============================================================
 CREATE TABLE IF NOT EXISTS policies (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    product_id UUID NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
-    campaign_code_id UUID REFERENCES campaign_codes(id) ON DELETE SET NULL,
-    policy_number VARCHAR(100) UNIQUE NOT NULL,
-    cover_amount DECIMAL(12, 2) NOT NULL,
-    monthly_premium DECIMAL(10, 2) NOT NULL,
-    status VARCHAR(30) NOT NULL DEFAULT 'ACTIVE', -- 'ACTIVE', 'CANCELLED', 'LAPSED'
-    effective_date DATE NOT NULL DEFAULT CURRENT_DATE,
-    cancellation_date DATE,
-    cancellation_reason VARCHAR(255),
-    address_line1 VARCHAR(255) NOT NULL,
-    address_line2 VARCHAR(255),
-    city VARCHAR(100) NOT NULL,
-    state VARCHAR(50) NOT NULL,
-    zip_code VARCHAR(20) NOT NULL,
-    certificate_s3_key VARCHAR(255),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+  id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id             UUID NOT NULL REFERENCES users(id),
+  product_id          UUID NOT NULL REFERENCES products(id),
+  campaign_code_id    UUID REFERENCES campaign_codes(id),
+  policy_number       VARCHAR(50) UNIQUE NOT NULL,
+  status              VARCHAR(20) NOT NULL DEFAULT 'ACTIVE'
+                        CHECK (status IN ('ACTIVE','LAPSED','CANCELLED','EXPIRED')),
+  cover_amount        NUMERIC(12,2) NOT NULL,
+  monthly_premium     NUMERIC(10,2) NOT NULL,
+  effective_date      DATE,
+  cancellation_date   DATE,
+  cancellation_reason TEXT,
+  address_line1       VARCHAR(255),
+  address_line2       VARCHAR(255),
+  city                VARCHAR(100),
+  state               VARCHAR(100),
+  zip_code            VARCHAR(20),
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 9. BENEFICIARIES TABLE (Owned by Jitendra)
+-- ============================================================
+-- TABLE: beneficiaries
+-- ============================================================
 CREATE TABLE IF NOT EXISTS beneficiaries (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    policy_id UUID NOT NULL REFERENCES policies(id) ON DELETE CASCADE,
-    first_name VARCHAR(100) NOT NULL,
-    last_name VARCHAR(100) NOT NULL,
-    relationship VARCHAR(50) NOT NULL,
-    percentage DECIMAL(5, 2) NOT NULL,
-    phone VARCHAR(30),
-    is_active BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+  id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  policy_id    UUID NOT NULL REFERENCES policies(id) ON DELETE CASCADE,
+  first_name   VARCHAR(100) NOT NULL,
+  last_name    VARCHAR(100) NOT NULL,
+  relationship VARCHAR(50),
+  percentage   NUMERIC(5,2) NOT NULL CHECK (percentage > 0 AND percentage <= 100),
+  phone        VARCHAR(30),
+  is_active    BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 10. POLICY_AUDIT_LOGS TABLE (Owned by Jitendra)
+-- ============================================================
+-- TABLE: policy_audit_logs
+-- ============================================================
 CREATE TABLE IF NOT EXISTS policy_audit_logs (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    policy_id UUID NOT NULL REFERENCES policies(id) ON DELETE CASCADE,
-    changed_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-    action VARCHAR(100) NOT NULL, -- 'ADDRESS_UPDATED', 'BENEFICIARY_ADDED', 'CANCELLED'
-    old_value JSONB,
-    new_value JSONB,
-    changed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+  id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  policy_id    UUID NOT NULL REFERENCES policies(id),
+  user_id      UUID REFERENCES users(id),
+  action       VARCHAR(50) NOT NULL,
+  field_name   VARCHAR(100),
+  old_value    TEXT,
+  new_value    TEXT,
+  notes        TEXT,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 11. PREMIUM_RECORDS TABLE (Owned by Aman)
+-- ============================================================
+-- TABLE: premium_records
+-- ============================================================
 CREATE TABLE IF NOT EXISTS premium_records (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    policy_id UUID NOT NULL REFERENCES policies(id) ON DELETE CASCADE,
-    billing_month DATE NOT NULL,
-    amount DECIMAL(10, 2) NOT NULL,
-    status VARCHAR(30) NOT NULL DEFAULT 'PENDING', -- 'PENDING', 'PAID', 'FAILED', 'RETRYING'
-    retry_count INT DEFAULT 0,
-    due_date TIMESTAMP WITH TIME ZONE,
-    paid_at TIMESTAMP WITH TIME ZONE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+  id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  policy_id    UUID NOT NULL REFERENCES policies(id),
+  amount       NUMERIC(10,2) NOT NULL,
+  due_date     DATE NOT NULL,
+  paid_date    DATE,
+  status       VARCHAR(20) NOT NULL DEFAULT 'PENDING'
+                 CHECK (status IN ('PENDING','PAID','OVERDUE','WAIVED')),
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 12. CLAIMS TABLE (Owned by Aman)
+-- ============================================================
+-- TABLE: claims
+-- ============================================================
 CREATE TABLE IF NOT EXISTS claims (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    policy_id UUID NOT NULL REFERENCES policies(id) ON DELETE CASCADE,
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    claim_number VARCHAR(100) UNIQUE NOT NULL,
-    incident_type VARCHAR(100) NOT NULL,
-    incident_date DATE NOT NULL,
-    description TEXT,
-    status VARCHAR(30) NOT NULL DEFAULT 'SUBMITTED', -- 'SUBMITTED', 'UNDER_REVIEW', 'APPROVED', 'REJECTED'
-    claimed_amount DECIMAL(12, 2) NOT NULL,
-    approved_amount DECIMAL(12, 2),
-    reviewer_notes TEXT,
-    reviewed_by UUID REFERENCES users(id) ON DELETE SET NULL,
-    reviewed_at TIMESTAMP WITH TIME ZONE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  policy_id       UUID NOT NULL REFERENCES policies(id),
+  user_id         UUID NOT NULL REFERENCES users(id),
+  claim_number    VARCHAR(50) UNIQUE NOT NULL,
+  claim_type      VARCHAR(50),
+  status          VARCHAR(20) NOT NULL DEFAULT 'SUBMITTED'
+                    CHECK (status IN ('SUBMITTED','UNDER_REVIEW','APPROVED','REJECTED','PAID')),
+  claim_amount    NUMERIC(12,2),
+  incident_date   DATE,
+  description     TEXT,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 13. CLAIM_DOCUMENTS TABLE (Owned by Aman)
+-- ============================================================
+-- TABLE: claim_documents
+-- ============================================================
 CREATE TABLE IF NOT EXISTS claim_documents (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    claim_id UUID NOT NULL REFERENCES claims(id) ON DELETE CASCADE,
-    file_name VARCHAR(255) NOT NULL,
-    s3_key VARCHAR(255) NOT NULL,
-    content_type VARCHAR(100),
-    file_size BIGINT,
-    uploaded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  claim_id    UUID NOT NULL REFERENCES claims(id) ON DELETE CASCADE,
+  file_name   VARCHAR(255) NOT NULL,
+  file_url    VARCHAR(500),
+  uploaded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- ============================================================
+-- TABLE: campaign_events
+-- ============================================================
+CREATE TABLE IF NOT EXISTS campaign_events (
+  id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  campaign_id  UUID NOT NULL REFERENCES campaigns(id),
+  event_type   VARCHAR(50) NOT NULL,
+  user_id      UUID REFERENCES users(id),
+  metadata     JSONB,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ============================================================
+-- GRANT PERMISSIONS TO insureflow_user
+-- ============================================================
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO insureflow_user;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO insureflow_user;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO insureflow_user;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO insureflow_user;
+
+-- ============================================================
 -- SEED DATA
--- Insert Products
-INSERT INTO products (name, code, description, status, premium_rate_per_thousand)
-VALUES 
-('Accidental Death & Dismemberment', 'DD', 'Comprehensive protection covering accidental death, loss of limbs, and severe injuries from unforeseen accidents.', 'FLAGSHIP', 0.60),
-('Hospital Accident Plan', 'HP', 'Direct cash payout for hospital stays and emergency room treatments resulting from accidents.', 'COMING_SOON', 0.85),
-('Recuperative Care', 'RC', 'Daily living allowance and recovery assistance following qualifying medical discharge.', 'COMING_SOON', 0.75)
+-- ============================================================
+
+-- Products
+INSERT INTO products (id, code, name, description) VALUES
+  (uuid_generate_v4(), 'DD', 'Accidental Death & Dismemberment (AD&D)', 'Group AD&D coverage for enrolled customers')
 ON CONFLICT (code) DO NOTHING;
 
--- Insert Default Demo Users (BCrypt hashed 'Password123!')
--- BCrypt: $2a$12$Nq9v7b1mP9s7GvHkXqH2Re98aYlE01m0rAwhs3iBshJkW9VrqDaqW
-INSERT INTO users (email, password_hash, first_name, last_name, date_of_birth, phone, role)
-VALUES 
-('jitendra@insureflow.com', '$2a$12$Nq9v7b1mP9s7GvHkXqH2Re98aYlE01m0rAwhs3iBshJkW9VrqDaqW', 'Jitendra', 'Chowdary', '1998-05-15', '+1-555-0101', 'CUSTOMER'),
-('aman@insureflow.com', '$2a$12$Nq9v7b1mP9s7GvHkXqH2Re98aYlE01m0rAwhs3iBshJkW9VrqDaqW', 'Aman', 'Kumar', '1997-08-20', '+1-555-0102', 'ADMIN'),
-('customer@example.com', '$2a$12$Nq9v7b1mP9s7GvHkXqH2Re98aYlE01m0rAwhs3iBshJkW9VrqDaqW', 'Sarah', 'Jenkins', '1988-03-22', '+1-555-0199', 'CUSTOMER')
-ON CONFLICT (email) DO NOTHING;
+-- Segments
+INSERT INTO segments (id, name, description) VALUES
+  (uuid_generate_v4(), 'Apex Trust Bank', 'Apex Trust Bank partner customers')
+ON CONFLICT DO NOTHING;
 
--- Insert Partner Bank Client
-INSERT INTO clients (name, code, contact_email, is_active)
-VALUES ('Apex Trust Bank', 'APEX-BANK', 'partnerships@apextrust.com', TRUE)
-ON CONFLICT (code) DO NOTHING;
-
--- Insert Active Campaign
+-- Campaign (linked to product DD)
 DO $$
 DECLARE
-    bank_id UUID;
-    prod_id UUID;
-    camp_id UUID;
+  v_product_id UUID;
+  v_segment_id UUID;
+  v_campaign_id UUID;
 BEGIN
-    SELECT id INTO bank_id FROM clients WHERE code = 'APEX-BANK' LIMIT 1;
-    SELECT id INTO prod_id FROM products WHERE code = 'DD' LIMIT 1;
-    
-    IF bank_id IS NOT NULL AND prod_id IS NOT NULL THEN
-        INSERT INTO campaigns (client_id, product_id, campaign_id, name, status, start_date, end_date)
-        VALUES (bank_id, prod_id, 'CMP-2026-APEX-ADD', 'Apex Fall 2026 AD&D Campaign', 'ACTIVE', '2026-09-01', '2026-12-31')
-        ON CONFLICT (campaign_id) DO NOTHING;
+  SELECT id INTO v_product_id FROM products WHERE code = 'DD' LIMIT 1;
+  SELECT id INTO v_segment_id FROM segments WHERE name = 'Apex Trust Bank' LIMIT 1;
 
-        SELECT id INTO camp_id FROM campaigns WHERE campaign_id = 'CMP-2026-APEX-ADD' LIMIT 1;
+  -- Insert campaign only if it doesn't exist
+  IF NOT EXISTS (SELECT 1 FROM campaigns WHERE name = 'Apex Trust Fall 2026') THEN
+    INSERT INTO campaigns (id, name, product_id, segment_id, status, start_date, end_date)
+    VALUES (uuid_generate_v4(), 'Apex Trust Fall 2026', v_product_id, v_segment_id, 'ACTIVE', '2026-01-01', '2027-12-31')
+    RETURNING id INTO v_campaign_id;
 
-        -- Insert Promo Campaign Codes
-        INSERT INTO campaign_codes (campaign_id, code, is_used)
-        VALUES 
-        (camp_id, 'ADD-FALL-2026', FALSE),
-        (camp_id, 'APEX-SECURE-100', FALSE),
-        (camp_id, 'WELCOME-ADD-50', FALSE)
-        ON CONFLICT (code) DO NOTHING;
-    END IF;
-END $$;
+    -- Campaign codes
+    INSERT INTO campaign_codes (id, campaign_id, code, is_used)
+    VALUES
+      (uuid_generate_v4(), v_campaign_id, 'ADD-FALL-2026', false),
+      (uuid_generate_v4(), v_campaign_id, 'APEX-SECURE-100', false),
+      (uuid_generate_v4(), v_campaign_id, 'WELCOME-ADD-50', false);
+  END IF;
+END
+$$;
+
+-- Admin user (Aman - blocked from customer portal)
+INSERT INTO users (email, password_hash, first_name, last_name, date_of_birth, role)
+VALUES (
+  'aman@insureflow.com',
+  '$2a$12$placeholder_hash_aman',
+  'Aman', 'Kumar',
+  '1992-05-15',
+  'ADMIN'
+) ON CONFLICT (email) DO NOTHING;
+
+-- ============================================================
+-- VERIFY
+-- ============================================================
+SELECT 'Setup complete!' as status;
+SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name;

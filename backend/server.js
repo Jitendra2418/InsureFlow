@@ -17,13 +17,13 @@ app.use(cors({
 app.use(express.json());
 
 // PostgreSQL Pool Connection
-const dbPort = parseInt(process.env.DB_PORT || '5433', 10);
+const dbPort = parseInt(process.env.DB_PORT || '5432', 10);
 const pool = new Pool({
   host: process.env.DB_HOST || 'localhost',
   port: dbPort,
   database: process.env.DB_NAME || 'insureflow',
   user: process.env.DB_USER || 'insureflow_user',
-  password: process.env.DB_PASSWORD || 'your_db_password',
+  password: process.env.DB_PASSWORD || 'InsureFlow2026!',
   connectionTimeoutMillis: 5000
 });
 
@@ -89,12 +89,18 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-// 2. Customer Registration (Strictly Creates Role CUSTOMER)
+// 2. Customer Registration (Strictly Creates Role CUSTOMER with Unique Aadhaar & Email)
 app.post('/api/auth/register', async (req, res) => {
-  const { email, password, firstName, lastName, dateOfBirth, phone } = req.body;
+  const { email, password, firstName, lastName, dateOfBirth, phone, aadharNumber } = req.body;
 
-  if (!email || !password || !firstName || !lastName || !dateOfBirth) {
-    return res.status(400).json({ error: 'Please provide all required fields.' });
+  if (!email || !password || !firstName || !lastName || !dateOfBirth || !aadharNumber) {
+    return res.status(400).json({ error: 'Please provide all required fields, including your 12-digit Aadhaar Number.' });
+  }
+
+  // Validate Aadhaar Number: Must be exactly 12 numeric digits
+  const cleanAadhar = aadharNumber.toString().replace(/[\s-]/g, '');
+  if (!/^\d{12}$/.test(cleanAadhar)) {
+    return res.status(400).json({ error: 'Invalid Aadhaar Number. Aadhaar must be exactly 12 numeric digits.' });
   }
 
   // Underwriting Rule: Age 18 to 69
@@ -111,7 +117,15 @@ app.post('/api/auth/register', async (req, res) => {
   }
 
   try {
-    // Check if user already exists
+    // 1. DUPLICATE CHECK: Verify Aadhaar number is NOT already registered
+    const existingAadhar = await pool.query('SELECT id FROM users WHERE aadhar_number = $1', [cleanAadhar]);
+    if (existingAadhar.rows.length > 0) {
+      return res.status(409).json({
+        error: `Duplicate Registration Blocked: A customer account with Aadhaar Number ending in ...${cleanAadhar.slice(-4)} is already registered in InsureFlow.`
+      });
+    }
+
+    // 2. DUPLICATE CHECK: Verify email is NOT already registered
     const existing = await pool.query('SELECT id FROM users WHERE email = $1', [email.trim().toLowerCase()]);
     if (existing.rows.length > 0) {
       return res.status(409).json({ error: 'An account with this email address already exists. Please sign in.' });
@@ -123,9 +137,9 @@ app.post('/api/auth/register', async (req, res) => {
 
     // Insert user into PostgreSQL
     const insertQuery = `
-      INSERT INTO users (email, password_hash, first_name, last_name, date_of_birth, phone, role)
-      VALUES ($1, $2, $3, $4, $5, $6, 'CUSTOMER')
-      RETURNING id, email, first_name, last_name, date_of_birth, phone, role, created_at
+      INSERT INTO users (email, password_hash, first_name, last_name, date_of_birth, phone, aadhar_number, role)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, 'CUSTOMER')
+      RETURNING id, email, first_name, last_name, date_of_birth, phone, aadhar_number, role, created_at
     `;
     const result = await pool.query(insertQuery, [
       email.trim().toLowerCase(),
@@ -133,7 +147,8 @@ app.post('/api/auth/register', async (req, res) => {
       firstName.trim(),
       lastName.trim(),
       dateOfBirth,
-      phone || null
+      phone || null,
+      cleanAadhar
     ]);
 
     const createdUser = result.rows[0];
@@ -155,6 +170,7 @@ app.post('/api/auth/register', async (req, res) => {
         lastName: createdUser.last_name,
         dateOfBirth: createdUser.date_of_birth,
         phone: createdUser.phone,
+        aadharNumber: createdUser.aadhar_number,
         role: createdUser.role
       }
     });
@@ -164,20 +180,24 @@ app.post('/api/auth/register', async (req, res) => {
   }
 });
 
-// 3. Customer Sign In (Strictly Allows CUSTOMER Role Only)
+// 3. Customer Sign In (Allows Sign In via Email or Aadhaar Number)
 app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body;
 
   if (!email || !password) {
-    return res.status(400).json({ error: 'Email and password are required.' });
+    return res.status(400).json({ error: 'Email or Aadhaar Number and password are required.' });
   }
 
   try {
-    const userQuery = 'SELECT * FROM users WHERE email = $1';
-    const result = await pool.query(userQuery, [email.trim().toLowerCase()]);
+    const rawInput = email.trim();
+    const cleanDigits = rawInput.replace(/[\s-]/g, '');
+
+    // Allow user to log in by either Email or 12-digit Aadhaar Number
+    const userQuery = 'SELECT * FROM users WHERE email = $1 OR aadhar_number = $2';
+    const result = await pool.query(userQuery, [rawInput.toLowerCase(), cleanDigits]);
 
     if (result.rows.length === 0) {
-      return res.status(401).json({ error: 'Invalid email or password.' });
+      return res.status(401).json({ error: 'Invalid email/Aadhaar or password.' });
     }
 
     const user = result.rows[0];
@@ -192,7 +212,7 @@ app.post('/api/auth/login', async (req, res) => {
     // Compare BCrypt password
     const passwordMatch = await bcrypt.compare(password, user.password_hash);
     if (!passwordMatch) {
-      return res.status(401).json({ error: 'Invalid email or password.' });
+      return res.status(401).json({ error: 'Invalid email/Aadhaar or password.' });
     }
 
     // Issue JWT
@@ -212,6 +232,7 @@ app.post('/api/auth/login', async (req, res) => {
         lastName: user.last_name,
         dateOfBirth: user.date_of_birth,
         phone: user.phone,
+        aadharNumber: user.aadhar_number,
         role: user.role
       }
     });
@@ -608,7 +629,7 @@ app.get('/api/policies', authenticateToken, async (req, res) => {
   }
 });
 
-// 5. Validate Campaign Code
+// 5. Validate Campaign Code (Multi-use: any customer can enroll via the campaign)
 app.post('/api/enrollment/validate-code', async (req, res) => {
   const { code } = req.body;
   if (!code) {
@@ -630,10 +651,8 @@ app.post('/api/enrollment/validate-code', async (req, res) => {
     }
 
     const codeRecord = result.rows[0];
-    if (codeRecord.is_used) {
-      return res.status(400).json({ valid: false, error: 'This campaign code has already been redeemed for an active policy.' });
-    }
 
+    // Note: Campaign codes can be used multiple times by different customers (e.g. from public ads/promotions)
     res.json({
       valid: true,
       code: codeRecord.code,
@@ -660,7 +679,26 @@ app.post('/api/enrollment/enroll', authenticateToken, async (req, res) => {
     beneficiaries
   } = req.body;
 
-  // Validation
+  // === ELIGIBILITY CHECK: Age 18–69 at time of enrollment ===
+  try {
+    const userRes = await pool.query('SELECT date_of_birth, first_name, last_name FROM users WHERE id = $1', [req.user.id]);
+    if (userRes.rows.length > 0 && userRes.rows[0].date_of_birth) {
+      const dob = new Date(userRes.rows[0].date_of_birth);
+      const today = new Date();
+      let age = today.getFullYear() - dob.getFullYear();
+      const m = today.getMonth() - dob.getMonth();
+      if (m < 0 || (m === 0 && today.getDate() < dob.getDate())) age--;
+      if (age < 18 || age > 69) {
+        return res.status(400).json({
+          error: `Underwriting eligibility check failed: Customer age ${age} is outside the eligible range of 18–69 years. Policy cannot be issued.`
+        });
+      }
+    }
+  } catch (eligErr) {
+    console.error('Eligibility check error:', eligErr.message);
+  }
+
+  // === INPUT VALIDATION ===
   if (!coverAmount || coverAmount < 10000 || coverAmount > 300000 || coverAmount % 5000 !== 0) {
     return res.status(400).json({ error: 'Cover amount must be between $10,000 and $300,000 in increments of $5,000.' });
   }
@@ -674,8 +712,8 @@ app.post('/api/enrollment/enroll', authenticateToken, async (req, res) => {
   }
 
   const totalPct = beneficiaries.reduce((sum, b) => sum + (parseFloat(b.percentage) || 0), 0);
-  if (totalPct !== 100) {
-    return res.status(400).json({ error: `Beneficiary percentages must equal 100%. Current total: ${totalPct}%` });
+  if (Math.abs(totalPct - 100) > 0.01) {
+    return res.status(400).json({ error: `Beneficiary percentages must equal 100%. Current total: ${totalPct.toFixed(1)}%` });
   }
 
   // Monthly Premium Formula: (cover_amount / 1000) * 0.60
@@ -701,18 +739,17 @@ app.post('/api/enrollment/enroll', authenticateToken, async (req, res) => {
       throw new Error("Customer already has an active policy for Accidental Death & Dismemberment.");
     }
 
-    // 3. Campaign code check if provided
+    // 3. Campaign code check if provided (multi-use allowed)
     let campaignCodeId = null;
+    let campaignId = null;
     if (campaignCode) {
       const codeCheck = await client.query(
-        "SELECT id, is_used FROM campaign_codes WHERE code = $1 FOR UPDATE",
+        "SELECT id, campaign_id FROM campaign_codes WHERE code = $1",
         [campaignCode.trim().toUpperCase()]
       );
       if (codeCheck.rows.length > 0) {
-        if (codeCheck.rows[0].is_used) {
-          throw new Error("This campaign code has already been redeemed.");
-        }
         campaignCodeId = codeCheck.rows[0].id;
+        campaignId = codeCheck.rows[0].campaign_id;
       }
     }
 
@@ -759,14 +796,18 @@ app.post('/api/enrollment/enroll', authenticateToken, async (req, res) => {
       ]);
     }
 
-    // 7. Mark campaign code as used if provided
-    if (campaignCodeId) {
+    // 7. Record Campaign Event & Initial Policy Audit Log
+    if (campaignId) {
       await client.query(`
-        UPDATE campaign_codes
-        SET is_used = true, used_by_user_id = $1, used_at = CURRENT_TIMESTAMP
-        WHERE id = $2
-      `, [req.user.id, campaignCodeId]);
+        INSERT INTO campaign_events (campaign_id, event_type, user_id, metadata)
+        VALUES ($1, 'CUSTOMER_ENROLLMENT', $2, $3)
+      `, [campaignId, req.user.id, JSON.stringify({ policyNumber, coverAmount, campaignCode })]);
     }
+
+    await client.query(`
+      INSERT INTO policy_audit_logs (policy_id, user_id, action, notes)
+      VALUES ($1, $2, 'POLICY_ENROLLED', 'Initial customer enrollment in AD&D coverage')
+    `, [createdPolicy.id, req.user.id]);
 
     await client.query('COMMIT');
 
@@ -790,7 +831,152 @@ app.post('/api/enrollment/enroll', authenticateToken, async (req, res) => {
   }
 });
 
-// 7. Cancel Policy
+// 7. Update Policy Details (Cover Amount, Address, Beneficiaries with Audit History)
+app.put('/api/policies/:id', authenticateToken, async (req, res) => {
+  const policyId = req.params.id;
+  const {
+    coverAmount,
+    addressLine1,
+    addressLine2,
+    city,
+    state,
+    zipCode,
+    beneficiaries
+  } = req.body;
+
+  try {
+    // 1. Verify policy belongs to this customer
+    const curRes = await pool.query(
+      'SELECT * FROM policies WHERE id = $1 AND user_id = $2',
+      [policyId, req.user.id]
+    );
+
+    if (curRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Policy not found or unauthorized.' });
+    }
+
+    const current = curRes.rows[0];
+    if (current.status !== 'ACTIVE') {
+      return res.status(400).json({ error: 'Only ACTIVE policies can be modified.' });
+    }
+
+    // 2. Validate Cover Amount if provided
+    let newCoverAmount = parseFloat(current.cover_amount);
+    let newMonthlyPremium = parseFloat(current.monthly_premium);
+
+    if (coverAmount !== undefined && coverAmount !== null) {
+      const numCover = Number(coverAmount);
+      if (numCover < 10000 || numCover > 300000 || numCover % 5000 !== 0) {
+        return res.status(400).json({ error: 'Cover amount must be between $10,000 and $300,000 in increments of $5,000.' });
+      }
+      newCoverAmount = numCover;
+      newMonthlyPremium = (numCover / 1000) * 0.60;
+    }
+
+    // 3. Validate Address fields
+    const newAddress1 = addressLine1 !== undefined ? addressLine1.trim() : current.address_line1;
+    const newAddress2 = addressLine2 !== undefined ? (addressLine2 ? addressLine2.trim() : null) : current.address_line2;
+    const newCity = city !== undefined ? city.trim() : current.city;
+    const newState = state !== undefined ? state.trim() : current.state;
+    const newZip = zipCode !== undefined ? zipCode.trim() : current.zip_code;
+
+    if (!newAddress1 || !newCity || !newState || !newZip) {
+      return res.status(400).json({ error: 'Complete mailing address (street, city, state, zip) is required.' });
+    }
+
+    // 4. Validate Beneficiaries if provided
+    if (beneficiaries !== undefined) {
+      if (!Array.isArray(beneficiaries) || beneficiaries.length === 0) {
+        return res.status(400).json({ error: 'At least one beneficiary is required.' });
+      }
+      const totalPct = beneficiaries.reduce((sum, b) => sum + (parseFloat(b.percentage) || 0), 0);
+      if (Math.abs(totalPct - 100) > 0.01) {
+        return res.status(400).json({ error: `Beneficiary percentages must sum to exactly 100%. Current sum: ${totalPct.toFixed(1)}%` });
+      }
+      for (const b of beneficiaries) {
+        if (!b.firstName || !b.firstName.trim() || !b.lastName || !b.lastName.trim()) {
+          return res.status(400).json({ error: 'First and last name are required for all beneficiaries.' });
+        }
+      }
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Update Policy
+      await client.query(`
+        UPDATE policies
+        SET cover_amount = $1, monthly_premium = $2,
+            address_line1 = $3, address_line2 = $4, city = $5, state = $6, zip_code = $7,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = $8 AND user_id = $9
+      `, [newCoverAmount, newMonthlyPremium, newAddress1, newAddress2, newCity, newState, newZip, policyId, req.user.id]);
+
+      // Audit Log for Cover Amount
+      if (parseFloat(current.cover_amount) !== newCoverAmount) {
+        await client.query(`
+          INSERT INTO policy_audit_logs (policy_id, user_id, action, field_name, old_value, new_value, notes)
+          VALUES ($1, $2, 'UPDATE_COVER_AMOUNT', 'cover_amount', $3, $4, 'Customer updated principal sum coverage')
+        `, [policyId, req.user.id, current.cover_amount.toString(), newCoverAmount.toString()]);
+      }
+
+      // Audit Log for Address
+      const oldAddrStr = `${current.address_line1 || ''}, ${current.city || ''}, ${current.state || ''} ${current.zip_code || ''}`;
+      const newAddrStr = `${newAddress1}, ${newCity}, ${newState} ${newZip}`;
+      if (oldAddrStr !== newAddrStr) {
+        await client.query(`
+          INSERT INTO policy_audit_logs (policy_id, user_id, action, field_name, old_value, new_value, notes)
+          VALUES ($1, $2, 'UPDATE_ADDRESS', 'mailing_address', $3, $4, 'Customer updated residential mailing address')
+        `, [policyId, req.user.id, oldAddrStr, newAddrStr]);
+      }
+
+      // Update Beneficiaries if provided
+      if (beneficiaries !== undefined) {
+        await client.query('DELETE FROM beneficiaries WHERE policy_id = $1', [policyId]);
+        for (const b of beneficiaries) {
+          await client.query(`
+            INSERT INTO beneficiaries (policy_id, first_name, last_name, relationship, percentage, phone)
+            VALUES ($1, $2, $3, $4, $5, $6)
+          `, [
+            policyId,
+            b.firstName.trim(),
+            b.lastName.trim(),
+            b.relationship || 'Spouse',
+            parseFloat(b.percentage),
+            b.phone || null
+          ]);
+        }
+
+        const benSummary = beneficiaries.map(b => `${b.firstName} ${b.lastName} (${b.percentage}%)`).join(', ');
+        await client.query(`
+          INSERT INTO policy_audit_logs (policy_id, user_id, action, field_name, old_value, new_value, notes)
+          VALUES ($1, $2, 'UPDATE_BENEFICIARIES', 'beneficiaries', NULL, $3, 'Customer updated beneficiary designation')
+        `, [policyId, req.user.id, benSummary]);
+      }
+
+      await client.query('COMMIT');
+
+      res.json({
+        message: 'Policy successfully updated in database.',
+        policyId,
+        coverAmount: newCoverAmount,
+        monthlyPremium: newMonthlyPremium
+      });
+    } catch (err) {
+      await client.query('ROLLBACK');
+      console.error('Error updating policy:', err);
+      res.status(500).json({ error: 'Failed to update policy: ' + err.message });
+    } finally {
+      client.release();
+    }
+  } catch (err) {
+    console.error('Error in policy update route:', err);
+    res.status(500).json({ error: 'Database error: ' + err.message });
+  }
+});
+
+// 8. Cancel Policy
 app.delete('/api/policies/:id', authenticateToken, async (req, res) => {
   try {
     const updateRes = await pool.query(`

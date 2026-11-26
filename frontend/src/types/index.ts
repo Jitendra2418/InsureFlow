@@ -21,6 +21,7 @@ export interface User {
   lastName: string;
   dateOfBirth?: string;
   phone?: string;
+  aadharNumber?: string;
   role: UserRole;
   createdAt?: string;
 }

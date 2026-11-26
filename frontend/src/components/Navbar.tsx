@@ -3,13 +3,23 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { Shield, LogOut, LayoutDashboard, Sparkles } from 'lucide-react';
 
-export const Navbar: React.FC<{ onOpenEnroll?: () => void }> = ({ onOpenEnroll }) => {
+export const Navbar: React.FC<{ 
+  onOpenEnroll?: () => void;
+  onMyPoliciesClick?: () => void;
+}> = ({ onOpenEnroll, onMyPoliciesClick }) => {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
 
   const handleLogout = () => {
     logout();
     navigate('/login');
+  };
+
+  const handleMyPoliciesClick = (e: React.MouseEvent) => {
+    if (onMyPoliciesClick) {
+      e.preventDefault();
+      onMyPoliciesClick();
+    }
   };
 
   return (
@@ -45,7 +55,8 @@ export const Navbar: React.FC<{ onOpenEnroll?: () => void }> = ({ onOpenEnroll }
 
               <Link
                 to="/dashboard"
-                className="flex items-center space-x-1.5 text-sm font-medium text-stone-700 hover:text-[#5A6644] px-3 py-2 rounded-md hover:bg-[#EAE2D6]/40 transition"
+                onClick={handleMyPoliciesClick}
+                className="flex items-center space-x-1.5 text-sm font-semibold text-stone-700 hover:text-[#5A6644] px-3.5 py-2 rounded-xl hover:bg-[#EAE2D6] transition border border-transparent hover:border-[#D8CBB9]"
               >
                 <LayoutDashboard className="w-4 h-4 text-[#8B9A6E]" />
                 <span className="hidden sm:inline">My Policies</span>

@@ -2,17 +2,23 @@ import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Navbar } from '../components/Navbar';
 import { EnrollmentModal } from '../components/EnrollmentModal';
+import { EditPolicyModal } from '../components/EditPolicyModal';
+import { Policy } from '../types';
+import { generateInsuranceCertificate } from '../utils/pdfCertificate';
 import { 
   ShieldCheck, FileText, Download, CheckCircle, 
   Calendar, Users, ArrowUpRight, 
-  Sparkles, Layers, DollarSign, Clock, ShieldAlert
+  Sparkles, Layers, DollarSign, Clock, ShieldAlert,
+  Edit3, MapPin
 } from 'lucide-react';
 
 export const CustomerDashboard: React.FC = () => {
   const { user, policies, cancelPolicy } = useAuth();
   const [isEnrollModalOpen, setIsEnrollModalOpen] = useState<boolean>(false);
+  const [editingPolicy, setEditingPolicy] = useState<Policy | null>(null);
   const [justEnrolledNumber, setJustEnrolledNumber] = useState<string | null>(null);
   const [downloadNotice, setDownloadNotice] = useState<string | null>(null);
+  const [updateNotice, setUpdateNotice] = useState<string | null>(null);
 
   // Quick Stats
   const activePolicies = policies.filter(p => p.status === 'ACTIVE');
@@ -26,41 +32,58 @@ export const CustomerDashboard: React.FC = () => {
     }, 8000);
   };
 
-  const handleDownloadCertificate = (policyNumber: string) => {
-    setDownloadNotice(`Generating official PDF certificate for Policy #${policyNumber}... S3 pre-signed URL accessed.`);
+  const scrollToPolicies = () => {
+    const el = document.getElementById('policies-section');
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth' });
+    }
+  };
+
+  const handleDownloadCertificate = (target: Policy | string) => {
+    const policy = typeof target === 'string'
+      ? policies.find(p => p.policyNumber === target)
+      : target;
+
+    if (!policy) return;
+
+    setDownloadNotice(`Rendering official PDF Certificate for Policy #${policy.policyNumber}...`);
     setTimeout(() => {
-      // Trigger a printable/downloadable mock certificate file
-      const element = document.createElement("a");
-      const file = new Blob([
-        `========================================================\n` +
-        `           INSUREFLOW INSURANCE CERTIFICATE             \n` +
-        `     Apex Trust Bank Partner AD&D Protection Plan       \n` +
-        `========================================================\n\n` +
-        `Policy Number    : ${policyNumber}\n` +
-        `Policyholder     : ${user?.firstName} ${user?.lastName}\n` +
-        `Coverage Product : Accidental Death & Dismemberment (AD&D)\n` +
-        `Status           : ACTIVE\n` +
-        `Effective Date   : ${new Date().toISOString().split('T')[0]}\n` +
-        `Underwritten by  : InsureFlow Underwriting Services\n` +
-        `Monthly Premium  : Paid via scheduled bank mandate\n\n` +
-        `========================================================\n` +
-        `This is a digitally certified insurance schedule under AWS S3.`
-      ], { type: 'text/plain' });
-      element.href = URL.createObjectURL(file);
-      element.download = `InsureFlow_Certificate_${policyNumber}.txt`;
-      document.body.appendChild(element);
-      element.click();
-      document.body.removeChild(element);
+      generateInsuranceCertificate(policy, user);
       setDownloadNotice(null);
-    }, 1200);
+    }, 600);
   };
 
   return (
     <div className="min-h-screen bg-[#F7F2EB] flex flex-col">
-      <Navbar onOpenEnroll={() => setIsEnrollModalOpen(true)} />
+      <Navbar onOpenEnroll={() => setIsEnrollModalOpen(true)} onMyPoliciesClick={scrollToPolicies} />
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
         
+        {/* Policy Successfully Updated Notice */}
+        {updateNotice && (
+          <div className="p-4 bg-emerald-50 border border-emerald-300 rounded-2xl flex items-center justify-between shadow-sm animate-fade-in">
+            <div className="flex items-center space-x-3">
+              <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center">
+                <CheckCircle className="w-6 h-6" />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-emerald-900">
+                  Policy Successfully Updated in PostgreSQL!
+                </h4>
+                <p className="text-xs text-emerald-700 font-medium">
+                  {updateNotice}
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => setUpdateNotice(null)}
+              className="text-emerald-700 hover:text-emerald-900 text-xs font-bold underline"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+
         {/* Success Alert Banner on Fresh Enrollment */}
         {justEnrolledNumber && (
           <div className="p-4 bg-emerald-50 border border-emerald-300 rounded-2xl flex items-center justify-between shadow-sm animate-fade-in">
@@ -267,12 +290,22 @@ export const CustomerDashboard: React.FC = () => {
                         <Calendar className="w-3.5 h-3.5 text-stone-400" />
                         <span><strong>Effective Date:</strong> {policy.effectiveDate}</span>
                       </div>
+
+                      {policy.addressLine1 && (
+                        <div className="flex items-start space-x-2">
+                          <MapPin className="w-3.5 h-3.5 text-stone-400 mt-0.5 flex-shrink-0" />
+                          <span>
+                            <strong>Mailing Address:</strong> {policy.addressLine1}{policy.addressLine2 ? `, ${policy.addressLine2}` : ''}, {policy.city}, {policy.state} {policy.zipCode}
+                          </span>
+                        </div>
+                      )}
+
                       <div className="flex items-start space-x-2">
-                        <Users className="w-3.5 h-3.5 text-stone-400 mt-0.5" />
+                        <Users className="w-3.5 h-3.5 text-stone-400 mt-0.5 flex-shrink-0" />
                         <div>
                           <strong>Beneficiaries: </strong>
                           {policy.beneficiaries.map((b, i) => (
-                            <span key={i} className="inline-block mr-2">
+                            <span key={i} className="inline-block mr-2 bg-[#F7F2EB] px-2 py-0.5 rounded border border-[#EAE2D6]">
                               {b.firstName} {b.lastName} ({b.relationship} &bull; {b.percentage}%)
                             </span>
                           ))}
@@ -282,14 +315,26 @@ export const CustomerDashboard: React.FC = () => {
                   </div>
 
                   {/* Actions Bar */}
-                  <div className="pt-4 border-t border-[#EEEEEE] flex items-center justify-between">
-                    <button
-                      onClick={() => handleDownloadCertificate(policy.policyNumber)}
-                      className="inline-flex items-center space-x-1.5 text-xs font-bold text-[#5A6644] hover:text-[#2E3523] bg-[#EAE2D6]/50 hover:bg-[#EAE2D6] px-3.5 py-2 rounded-xl transition border border-[#D8CBB9]"
-                    >
-                      <Download className="w-3.5 h-3.5 text-[#8B9A6E]" />
-                      <span>Download Certificate</span>
-                    </button>
+                  <div className="pt-4 border-t border-[#EEEEEE] flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center space-x-2">
+                      <button
+                        onClick={() => handleDownloadCertificate(policy)}
+                        className="inline-flex items-center space-x-1.5 text-xs font-bold text-[#5A6644] hover:text-[#2E3523] bg-[#EAE2D6]/50 hover:bg-[#EAE2D6] px-3.5 py-2 rounded-xl transition border border-[#D8CBB9]"
+                      >
+                        <Download className="w-3.5 h-3.5 text-[#8B9A6E]" />
+                        <span>Download Certificate</span>
+                      </button>
+
+                      {policy.status === 'ACTIVE' && (
+                        <button
+                          onClick={() => setEditingPolicy(policy)}
+                          className="inline-flex items-center space-x-1.5 text-xs font-bold text-stone-700 hover:text-stone-900 bg-white hover:bg-[#EAE2D6] px-3.5 py-2 rounded-xl transition border border-[#D8CBB9] shadow-sm"
+                        >
+                          <Edit3 className="w-3.5 h-3.5 text-[#8B9A6E]" />
+                          <span>Edit Policy Details</span>
+                        </button>
+                      )}
+                    </div>
 
                     {policy.status === 'ACTIVE' && (
                       <button
@@ -298,7 +343,7 @@ export const CustomerDashboard: React.FC = () => {
                             cancelPolicy(policy.id);
                           }
                         }}
-                        className="text-xs font-semibold text-stone-400 hover:text-red-600 transition"
+                        className="text-xs font-semibold text-stone-400 hover:text-red-600 transition py-1 px-2"
                       >
                         Cancel Policy
                       </button>
@@ -452,6 +497,17 @@ export const CustomerDashboard: React.FC = () => {
         isOpen={isEnrollModalOpen}
         onClose={() => setIsEnrollModalOpen(false)}
         onSuccess={handleEnrollSuccess}
+      />
+
+      {/* Edit Policy Modal */}
+      <EditPolicyModal
+        isOpen={!!editingPolicy}
+        policy={editingPolicy}
+        onClose={() => setEditingPolicy(null)}
+        onSuccess={(msg) => {
+          setUpdateNotice(msg);
+          setTimeout(() => setUpdateNotice(null), 8000);
+        }}
       />
     </div>
   );
