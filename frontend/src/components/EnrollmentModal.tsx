@@ -20,7 +20,7 @@ export const EnrollmentModal: React.FC<EnrollmentModalProps> = ({ isOpen, onClos
   const [step, setStep] = useState<number>(1);
 
   // Form State
-  const [campaignCode, setCampaignCode] = useState<string>('ADD-FALL-2026');
+  const [campaignCode, setCampaignCode] = useState<string>('');
   const [codeValid, setCodeValid] = useState<boolean | null>(null);
   const [codeError, setCodeError] = useState<string>('');
   const [isValidatingCode, setIsValidatingCode] = useState<boolean>(false);

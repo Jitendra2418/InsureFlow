@@ -15,9 +15,19 @@ interface AuthContextType {
     lastName: string;
     dateOfBirth: string;
     phone: string;
+    aadharNumber: string;
   }) => Promise<{ success: boolean; error?: string }>;
   logout: () => void;
   refreshPolicies: () => Promise<void>;
+  updatePolicy: (policyId: string, updateData: {
+    coverAmount?: number;
+    addressLine1?: string;
+    addressLine2?: string | null;
+    city?: string;
+    state?: string;
+    zipCode?: string;
+    beneficiaries?: { firstName: string; lastName: string; relationship: string; percentage: number; phone?: string }[];
+  }) => Promise<{ success: boolean; error?: string }>;
   cancelPolicy: (policyId: string) => Promise<{ success: boolean; error?: string }>;
 }
 
@@ -103,6 +113,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     lastName: string;
     dateOfBirth: string;
     phone: string;
+    aadharNumber: string;
   }): Promise<{ success: boolean; error?: string }> => {
     try {
       const res = await apiRequest<{ token: string; user: User }>('/auth/register', {
@@ -127,6 +138,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     localStorage.removeItem('insureflow_token');
   };
 
+  const updatePolicy = async (policyId: string, updateData: {
+    coverAmount?: number;
+    addressLine1?: string;
+    addressLine2?: string | null;
+    city?: string;
+    state?: string;
+    zipCode?: string;
+    beneficiaries?: { firstName: string; lastName: string; relationship: string; percentage: number; phone?: string }[];
+  }): Promise<{ success: boolean; error?: string }> => {
+    try {
+      await apiRequest(`/policies/${policyId}`, {
+        method: 'PUT',
+        body: JSON.stringify(updateData)
+      });
+      await refreshPolicies();
+      return { success: true };
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to update policy.';
+      return { success: false, error: errorMessage };
+    }
+  };
+
   const cancelPolicy = async (policyId: string): Promise<{ success: boolean; error?: string }> => {
     try {
       await apiRequest(`/policies/${policyId}`, { method: 'DELETE' });
@@ -148,6 +181,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       signup,
       logout,
       refreshPolicies,
+      updatePolicy,
       cancelPolicy
     }}>
       {children}
