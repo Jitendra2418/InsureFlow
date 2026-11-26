@@ -16,6 +16,16 @@ interface AuthContextType {
     dateOfBirth: string;
     phone: string;
   }) => Promise<{ success: boolean; error?: string }>;
+  adminLogin: (email: string, password: string, role?: 'ADMIN' | 'OPERATIONS') => Promise<{ success: boolean; error?: string }>;
+  adminSignup: (adminData: {
+    name?: string;
+    firstName?: string;
+    lastName?: string;
+    email: string;
+    phone?: string;
+    password: string;
+    role?: 'ADMIN' | 'OPERATIONS';
+  }) => Promise<{ success: boolean; error?: string }>;
   logout: () => void;
   refreshPolicies: () => Promise<void>;
   cancelPolicy: (policyId: string) => Promise<{ success: boolean; error?: string }>;
@@ -119,6 +129,48 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  // Admin / Operator Login
+  const adminLogin = async (email: string, password: string, role?: 'ADMIN' | 'OPERATIONS'): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const res = await apiRequest<{ token: string; user: User }>('/auth/admin/login', {
+        method: 'POST',
+        body: JSON.stringify({ email, password, role })
+      });
+
+      setUser(res.user);
+      setToken(res.token);
+      return { success: true };
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : 'Sign in failed. Please verify credentials.';
+      return { success: false, error: errorMessage };
+    }
+  };
+
+  // Admin / Operator Signup
+  const adminSignup = async (adminData: {
+    name?: string;
+    firstName?: string;
+    lastName?: string;
+    email: string;
+    phone?: string;
+    password: string;
+    role?: 'ADMIN' | 'OPERATIONS';
+  }): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const res = await apiRequest<{ token: string; user: User }>('/auth/admin/register', {
+        method: 'POST',
+        body: JSON.stringify(adminData)
+      });
+
+      setUser(res.user);
+      setToken(res.token);
+      return { success: true };
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : 'Registration failed.';
+      return { success: false, error: errorMessage };
+    }
+  };
+
   const logout = () => {
     setUser(null);
     setToken(null);
@@ -146,6 +198,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       isLoadingPolicies,
       login,
       signup,
+      adminLogin,
+      adminSignup,
       logout,
       refreshPolicies,
       cancelPolicy
