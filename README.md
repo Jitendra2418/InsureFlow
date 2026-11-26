@@ -1,4 +1,3 @@
-[README.md](https://github.com/user-attachments/files/35455856/README.md)
 # 🛡️ InsureFlow – Insurance Enrollment & Servicing Platform
 
 <p align="center">

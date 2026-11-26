@@ -1,0 +1,458 @@
+import React, { useState } from 'react';
+import { useAuth } from '../context/AuthContext';
+import { Navbar } from '../components/Navbar';
+import { EnrollmentModal } from '../components/EnrollmentModal';
+import { 
+  ShieldCheck, FileText, Download, CheckCircle, 
+  Calendar, Users, ArrowUpRight, 
+  Sparkles, Layers, DollarSign, Clock, ShieldAlert
+} from 'lucide-react';
+
+export const CustomerDashboard: React.FC = () => {
+  const { user, policies, cancelPolicy } = useAuth();
+  const [isEnrollModalOpen, setIsEnrollModalOpen] = useState<boolean>(false);
+  const [justEnrolledNumber, setJustEnrolledNumber] = useState<string | null>(null);
+  const [downloadNotice, setDownloadNotice] = useState<string | null>(null);
+
+  // Quick Stats
+  const activePolicies = policies.filter(p => p.status === 'ACTIVE');
+  const totalCoverage = activePolicies.reduce((sum, p) => sum + p.coverAmount, 0);
+  const totalMonthlyPremium = activePolicies.reduce((sum, p) => sum + p.monthlyPremium, 0);
+
+  const handleEnrollSuccess = (policyNumber: string) => {
+    setJustEnrolledNumber(policyNumber);
+    setTimeout(() => {
+      setJustEnrolledNumber(null);
+    }, 8000);
+  };
+
+  const handleDownloadCertificate = (policyNumber: string) => {
+    setDownloadNotice(`Generating official PDF certificate for Policy #${policyNumber}... S3 pre-signed URL accessed.`);
+    setTimeout(() => {
+      // Trigger a printable/downloadable mock certificate file
+      const element = document.createElement("a");
+      const file = new Blob([
+        `========================================================\n` +
+        `           INSUREFLOW INSURANCE CERTIFICATE             \n` +
+        `     Apex Trust Bank Partner AD&D Protection Plan       \n` +
+        `========================================================\n\n` +
+        `Policy Number    : ${policyNumber}\n` +
+        `Policyholder     : ${user?.firstName} ${user?.lastName}\n` +
+        `Coverage Product : Accidental Death & Dismemberment (AD&D)\n` +
+        `Status           : ACTIVE\n` +
+        `Effective Date   : ${new Date().toISOString().split('T')[0]}\n` +
+        `Underwritten by  : InsureFlow Underwriting Services\n` +
+        `Monthly Premium  : Paid via scheduled bank mandate\n\n` +
+        `========================================================\n` +
+        `This is a digitally certified insurance schedule under AWS S3.`
+      ], { type: 'text/plain' });
+      element.href = URL.createObjectURL(file);
+      element.download = `InsureFlow_Certificate_${policyNumber}.txt`;
+      document.body.appendChild(element);
+      element.click();
+      document.body.removeChild(element);
+      setDownloadNotice(null);
+    }, 1200);
+  };
+
+  return (
+    <div className="min-h-screen bg-[#F7F2EB] flex flex-col">
+      <Navbar onOpenEnroll={() => setIsEnrollModalOpen(true)} />
+
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+        
+        {/* Success Alert Banner on Fresh Enrollment */}
+        {justEnrolledNumber && (
+          <div className="p-4 bg-emerald-50 border border-emerald-300 rounded-2xl flex items-center justify-between shadow-sm animate-fade-in">
+            <div className="flex items-center space-x-3">
+              <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center">
+                <CheckCircle className="w-6 h-6" />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-emerald-900">
+                  Congratulations! Policy #{justEnrolledNumber} is now Active!
+                </h4>
+                <p className="text-xs text-emerald-700">
+                  Your AD&D protection has been bound. A welcome packet and PDF certificate are ready in your dashboard.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => handleDownloadCertificate(justEnrolledNumber)}
+              className="bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold px-3.5 py-2 rounded-xl transition shadow"
+            >
+              Download PDF Schedule
+            </button>
+          </div>
+        )}
+
+        {/* Certificate download notice */}
+        {downloadNotice && (
+          <div className="p-3 bg-[#EAE2D6] border border-[#D8CBB9] rounded-xl text-xs text-[#2E3523] flex items-center space-x-2 font-medium">
+            <Download className="w-4 h-4 text-[#8B9A6E] animate-bounce" />
+            <span>{downloadNotice}</span>
+          </div>
+        )}
+
+        {/* Hero Welcome Banner */}
+        <section className="bg-gradient-to-r from-[#EAE2D6] via-[#F3EFE8] to-[#EAE2D6] rounded-3xl p-6 sm:p-8 border border-[#D8CBB9] shadow-sm relative overflow-hidden">
+          <div className="relative z-10 max-w-2xl">
+            <div className="inline-flex items-center space-x-2 bg-white/80 backdrop-blur-sm px-3 py-1 rounded-full text-xs font-bold text-[#5A6644] mb-3 border border-[#D8CBB9]">
+              <Sparkles className="w-3.5 h-3.5 text-[#8B9A6E]" />
+              <span>Partner Campaign: Apex Trust Bank AD&D Plan</span>
+            </div>
+            <h1 className="text-2xl sm:text-3xl font-extrabold text-[#2E3523] tracking-tight">
+              Welcome back, {user?.firstName || 'Valued Customer'}
+            </h1>
+            <p className="mt-2 text-sm text-stone-600 leading-relaxed font-medium">
+              Manage your active policy schedules, add designated beneficiaries, or enroll in additional accidental death & dismemberment coverage options.
+            </p>
+            <div className="mt-5 flex flex-wrap gap-3">
+              <button
+                onClick={() => setIsEnrollModalOpen(true)}
+                className="bg-[#8B9A6E] hover:bg-[#738258] text-white px-5 py-2.5 rounded-xl text-sm font-bold shadow-md transition hover:scale-[1.02] active:scale-[0.98] flex items-center space-x-2"
+              >
+                <Sparkles className="w-4 h-4" />
+                <span>Enroll in AD&D Coverage</span>
+              </button>
+              <a
+                href="#policies-section"
+                className="bg-white hover:bg-[#EEEEEE] text-stone-800 px-5 py-2.5 rounded-xl text-sm font-semibold border border-[#D8CBB9] transition shadow-sm"
+              >
+                View My Policies ({activePolicies.length})
+              </a>
+            </div>
+          </div>
+        </section>
+
+        {/* Top Metrics Cards */}
+        <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="bg-[#EAE2D6] p-5 rounded-2xl border border-[#D8CBB9] shadow-sm flex items-center space-x-4">
+            <div className="w-12 h-12 rounded-xl bg-[#8B9A6E] text-white flex items-center justify-center shadow-sm">
+              <ShieldCheck className="w-6 h-6" />
+            </div>
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wider text-stone-600">Active Policies</p>
+              <p className="text-2xl font-extrabold text-[#2E3523]">{activePolicies.length}</p>
+              <p className="text-[11px] text-[#5A6644] font-medium">Underwritten & Active</p>
+            </div>
+          </div>
+
+          <div className="bg-[#EAE2D6] p-5 rounded-2xl border border-[#D8CBB9] shadow-sm flex items-center space-x-4">
+            <div className="w-12 h-12 rounded-xl bg-[#8B9A6E] text-white flex items-center justify-center shadow-sm">
+              <DollarSign className="w-6 h-6" />
+            </div>
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wider text-stone-600">Total Cover Amount</p>
+              <p className="text-2xl font-extrabold text-[#2E3523]">
+                ${totalCoverage.toLocaleString()}
+              </p>
+              <p className="text-[11px] text-[#5A6644] font-medium">Principal Sum Benefit</p>
+            </div>
+          </div>
+
+          <div className="bg-[#EAE2D6] p-5 rounded-2xl border border-[#D8CBB9] shadow-sm flex items-center space-x-4">
+            <div className="w-12 h-12 rounded-xl bg-[#8B9A6E] text-white flex items-center justify-center shadow-sm">
+              <Layers className="w-6 h-6" />
+            </div>
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wider text-stone-600">Monthly Premium</p>
+              <p className="text-2xl font-extrabold text-[#2E3523]">
+                ${totalMonthlyPremium.toFixed(2)}
+              </p>
+              <p className="text-[11px] text-[#5A6644] font-medium">Auto-deducted monthly</p>
+            </div>
+          </div>
+
+          <div className="bg-[#EAE2D6] p-5 rounded-2xl border border-[#D8CBB9] shadow-sm flex items-center space-x-4">
+            <div className="w-12 h-12 rounded-xl bg-[#8B9A6E] text-white flex items-center justify-center shadow-sm">
+              <Clock className="w-6 h-6" />
+            </div>
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wider text-stone-600">Next Billing Cycle</p>
+              <p className="text-2xl font-extrabold text-[#2E3523]">Dec 01</p>
+              <p className="text-[11px] text-[#5A6644] font-medium">Spring @Scheduled Job</p>
+            </div>
+          </div>
+        </section>
+
+        {/* My Enrolled Policies Section */}
+        <section id="policies-section" className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-xl font-bold text-[#2E3523]">My Enrolled Insurance Policies</h2>
+              <p className="text-xs text-stone-600">
+                Managed under Jitendra's Enrollment & Policy Module (P0)
+              </p>
+            </div>
+            <button
+              onClick={() => setIsEnrollModalOpen(true)}
+              className="inline-flex items-center space-x-1.5 text-xs font-bold text-[#5A6644] bg-[#EAE2D6] hover:bg-[#D8CBB9] px-3.5 py-2 rounded-xl border border-[#D8CBB9] transition"
+            >
+              <span>+ Enroll Another Policy</span>
+            </button>
+          </div>
+
+          {policies.length === 0 ? (
+            <div className="bg-white rounded-3xl p-12 text-center border border-[#EAE2D6] shadow-sm space-y-4">
+              <div className="w-16 h-16 rounded-2xl bg-[#EEEEEE] text-stone-400 flex items-center justify-center mx-auto">
+                <ShieldAlert className="w-8 h-8" />
+              </div>
+              <h3 className="text-lg font-bold text-stone-800">No Insurance Policies Enrolled Yet</h3>
+              <p className="text-xs text-stone-500 max-w-md mx-auto">
+                You haven't activated your Accidental Death & Dismemberment cover yet. Use your partner campaign code to get started today.
+              </p>
+              <button
+                onClick={() => setIsEnrollModalOpen(true)}
+                className="bg-[#8B9A6E] hover:bg-[#738258] text-white px-6 py-2.5 rounded-xl text-xs font-bold shadow transition"
+              >
+                Enroll Now in AD&D
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {policies.map((policy) => (
+                <div
+                  key={policy.id}
+                  className="bg-white rounded-3xl p-6 border border-[#EAE2D6] shadow-sm hover:shadow-md transition-all flex flex-col justify-between"
+                >
+                  <div>
+                    {/* Top row: Status & Policy Number */}
+                    <div className="flex items-center justify-between pb-4 border-b border-[#EEEEEE]">
+                      <div className="flex items-center space-x-2.5">
+                        <div className="w-10 h-10 rounded-xl bg-[#8B9A6E]/15 text-[#5A6644] flex items-center justify-center">
+                          <FileText className="w-5 h-5 stroke-[2.2]" />
+                        </div>
+                        <div>
+                          <p className="text-[11px] font-mono font-bold text-stone-500 uppercase tracking-wider">
+                            Policy #{policy.policyNumber}
+                          </p>
+                          <h3 className="text-base font-bold text-[#2E3523] leading-snug">
+                            {policy.productName}
+                          </h3>
+                        </div>
+                      </div>
+
+                      <span className={`px-2.5 py-1 rounded-full text-xs font-bold tracking-wide ${
+                        policy.status === 'ACTIVE'
+                          ? 'bg-[#8B9A6E]/15 text-[#5A6644] border border-[#8B9A6E]/30'
+                          : 'bg-stone-200 text-stone-600'
+                      }`}>
+                        {policy.status}
+                      </span>
+                    </div>
+
+                    {/* Coverage & Premium Grid */}
+                    <div className="grid grid-cols-2 gap-4 py-4 border-b border-[#EEEEEE]">
+                      <div className="bg-[#F7F2EB] p-3 rounded-xl border border-[#EAE2D6]">
+                        <p className="text-[11px] font-bold uppercase text-stone-500">Cover Amount</p>
+                        <p className="text-xl font-extrabold text-[#2E3523]">
+                          ${policy.coverAmount.toLocaleString()}
+                        </p>
+                        <p className="text-[10px] text-[#5A6644] font-medium">Principal Sum</p>
+                      </div>
+
+                      <div className="bg-[#F7F2EB] p-3 rounded-xl border border-[#EAE2D6]">
+                        <p className="text-[11px] font-bold uppercase text-stone-500">Monthly Premium</p>
+                        <p className="text-xl font-extrabold text-[#5A6644]">
+                          ${policy.monthlyPremium.toFixed(2)}<span className="text-xs text-stone-400 font-normal">/mo</span>
+                        </p>
+                        <p className="text-[10px] text-stone-500">Formula: $0.60 per $1k</p>
+                      </div>
+                    </div>
+
+                    {/* Policy Details List */}
+                    <div className="py-3 space-y-2 text-xs text-stone-600">
+                      <div className="flex items-center space-x-2">
+                        <Calendar className="w-3.5 h-3.5 text-stone-400" />
+                        <span><strong>Effective Date:</strong> {policy.effectiveDate}</span>
+                      </div>
+                      <div className="flex items-start space-x-2">
+                        <Users className="w-3.5 h-3.5 text-stone-400 mt-0.5" />
+                        <div>
+                          <strong>Beneficiaries: </strong>
+                          {policy.beneficiaries.map((b, i) => (
+                            <span key={i} className="inline-block mr-2">
+                              {b.firstName} {b.lastName} ({b.relationship} &bull; {b.percentage}%)
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Actions Bar */}
+                  <div className="pt-4 border-t border-[#EEEEEE] flex items-center justify-between">
+                    <button
+                      onClick={() => handleDownloadCertificate(policy.policyNumber)}
+                      className="inline-flex items-center space-x-1.5 text-xs font-bold text-[#5A6644] hover:text-[#2E3523] bg-[#EAE2D6]/50 hover:bg-[#EAE2D6] px-3.5 py-2 rounded-xl transition border border-[#D8CBB9]"
+                    >
+                      <Download className="w-3.5 h-3.5 text-[#8B9A6E]" />
+                      <span>Download Certificate</span>
+                    </button>
+
+                    {policy.status === 'ACTIVE' && (
+                      <button
+                        onClick={() => {
+                          if (confirm(`Are you sure you want to cancel policy #${policy.policyNumber}?`)) {
+                            cancelPolicy(policy.id);
+                          }
+                        }}
+                        className="text-xs font-semibold text-stone-400 hover:text-red-600 transition"
+                      >
+                        Cancel Policy
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        {/* Product Catalog Section */}
+        <section className="space-y-4 pt-4 border-t border-[#EAE2D6]">
+          <div>
+            <h2 className="text-xl font-bold text-[#2E3523]">Explore Product Catalog</h2>
+            <p className="text-xs text-stone-600">
+              Integrated insurance covers per System Architecture Section 5 (Products Table)
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {/* AD&D - Flagship */}
+            <div className="bg-[#EAE2D6] rounded-3xl p-6 border-2 border-[#8B9A6E] shadow-sm flex flex-col justify-between relative overflow-hidden">
+              <div className="absolute top-4 right-4 bg-[#8B9A6E] text-white text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full tracking-wider">
+                Flagship
+              </div>
+              <div>
+                <span className="text-xs font-mono font-bold text-[#5A6644]">CODE: DD</span>
+                <h3 className="text-lg font-bold text-[#2E3523] mt-1">
+                  Accidental Death & Dismemberment
+                </h3>
+                <p className="text-xs text-stone-600 mt-2 leading-relaxed">
+                  Comprehensive 24/7 protection covering accidental death, loss of limbs, eyesight, and severe injuries from unforeseen accidents worldwide.
+                </p>
+                <div className="mt-4 p-3 bg-white/80 rounded-xl border border-[#D8CBB9] text-xs space-y-1">
+                  <div className="flex justify-between text-stone-600">
+                    <span>Cover Range:</span>
+                    <strong className="text-stone-800">$10,000 – $300,000</strong>
+                  </div>
+                  <div className="flex justify-between text-stone-600">
+                    <span>Premium Rate:</span>
+                    <strong className="text-[#5A6644]">$0.60 per $1,000 / mo</strong>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-5">
+                <button
+                  onClick={() => setIsEnrollModalOpen(true)}
+                  className="w-full bg-[#8B9A6E] hover:bg-[#738258] text-white py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-center space-x-1.5 shadow"
+                >
+                  <span>Enroll in AD&D</span>
+                  <ArrowUpRight className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Hospital Accident Plan */}
+            <div className="bg-white rounded-3xl p-6 border border-[#EAE2D6] shadow-sm flex flex-col justify-between opacity-80">
+              <div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-mono font-bold text-stone-400">CODE: HP</span>
+                  <span className="bg-[#EEEEEE] text-stone-600 text-[10px] font-bold uppercase px-2 py-0.5 rounded-full">
+                    Coming Soon
+                  </span>
+                </div>
+                <h3 className="text-lg font-bold text-stone-800 mt-2">
+                  Hospital Accident Plan
+                </h3>
+                <p className="text-xs text-stone-500 mt-2 leading-relaxed">
+                  Direct cash payouts for overnight hospital stays and emergency room visits resulting directly from covered accidental injuries.
+                </p>
+                <div className="mt-4 p-3 bg-[#F7F2EB] rounded-xl border border-[#EAE2D6] text-xs space-y-1">
+                  <div className="flex justify-between text-stone-500">
+                    <span>Daily Stays:</span>
+                    <span className="font-semibold text-stone-700">Up to $500/day</span>
+                  </div>
+                  <div className="flex justify-between text-stone-500">
+                    <span>ER Benefit:</span>
+                    <span className="font-semibold text-stone-700">Lump sum reimbursement</span>
+                  </div>
+                </div>
+              </div>
+              <div className="mt-5">
+                <button
+                  disabled
+                  className="w-full bg-[#EEEEEE] text-stone-400 py-2.5 rounded-xl text-xs font-semibold cursor-not-allowed"
+                >
+                  Notify Me on Launch
+                </button>
+              </div>
+            </div>
+
+            {/* Recuperative Care */}
+            <div className="bg-white rounded-3xl p-6 border border-[#EAE2D6] shadow-sm flex flex-col justify-between opacity-80">
+              <div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-mono font-bold text-stone-400">CODE: RC</span>
+                  <span className="bg-[#EEEEEE] text-stone-600 text-[10px] font-bold uppercase px-2 py-0.5 rounded-full">
+                    Coming Soon
+                  </span>
+                </div>
+                <h3 className="text-lg font-bold text-stone-800 mt-2">
+                  Recuperative Care
+                </h3>
+                <p className="text-xs text-stone-500 mt-2 leading-relaxed">
+                  Post-discharge convalescent support and daily recovery assistance for qualifying accident or illness discharge.
+                </p>
+                <div className="mt-4 p-3 bg-[#F7F2EB] rounded-xl border border-[#EAE2D6] text-xs space-y-1">
+                  <div className="flex justify-between text-stone-500">
+                    <span>Home Care:</span>
+                    <span className="font-semibold text-stone-700">Daily living allowance</span>
+                  </div>
+                  <div className="flex justify-between text-stone-500">
+                    <span>Duration:</span>
+                    <span className="font-semibold text-stone-700">Up to 90 continuous days</span>
+                  </div>
+                </div>
+              </div>
+              <div className="mt-5">
+                <button
+                  disabled
+                  className="w-full bg-[#EEEEEE] text-stone-400 py-2.5 rounded-xl text-xs font-semibold cursor-not-allowed"
+                >
+                  Notify Me on Launch
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      {/* Footer */}
+      <footer className="mt-12 bg-[#EAE2D6] border-t border-[#D8CBB9] py-8 text-xs text-stone-600">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex items-center space-x-2">
+            <span className="font-bold text-[#2E3523]">InsureFlow</span>
+            <span>&bull;</span>
+            <span>Accidental Death & Dismemberment Insurance Platform</span>
+          </div>
+          <div className="flex items-center space-x-4 text-stone-500">
+            <span>Team Jitendra & Aman</span>
+            <span>&bull;</span>
+            <span>PostgreSQL 16 &bull; Spring Boot 3 &bull; React 18</span>
+          </div>
+        </div>
+      </footer>
+
+      {/* Enrollment Modal */}
+      <EnrollmentModal
+        isOpen={isEnrollModalOpen}
+        onClose={() => setIsEnrollModalOpen(false)}
+        onSuccess={handleEnrollSuccess}
+      />
+    </div>
+  );
+};
