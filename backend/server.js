@@ -17,9 +17,10 @@ app.use(cors({
 app.use(express.json());
 
 // PostgreSQL Pool Connection
+const dbPort = parseInt(process.env.DB_PORT || '5433', 10);
 const pool = new Pool({
   host: process.env.DB_HOST || 'localhost',
-  port: parseInt(process.env.DB_PORT || '5432', 10),
+  port: dbPort,
   database: process.env.DB_NAME || 'insureflow',
   user: process.env.DB_USER || 'insureflow_user',
   password: process.env.DB_PASSWORD || 'your_db_password',
