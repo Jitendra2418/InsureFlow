@@ -1,5 +1,19 @@
 export type UserRole = 'CUSTOMER' | 'ADMIN' | 'OPERATIONS';
 
+export interface Client {
+  id: string;
+  name: string;
+  clientId: string;
+  code: string;
+  businessType: 'Bank' | 'Creditunion' | 'Affinity partner' | 'Association' | string;
+  status: 'A-ACTIVE' | 'IA-INACTIVE' | string;
+  address?: string;
+  state?: string;
+  contactEmail?: string;
+  isActive: boolean;
+  createdAt: string;
+}
+
 export interface User {
   id: string;
   email: string;

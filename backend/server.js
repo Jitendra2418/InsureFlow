@@ -221,6 +221,336 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
+// 3b. Admin / Operator Registration (Creates Role ADMIN or OPERATIONS)
+app.post('/api/auth/admin/register', async (req, res) => {
+  const { name, firstName, lastName, email, phone, password, role } = req.body;
+
+  let fName = (firstName || '').trim();
+  let lName = (lastName || '').trim();
+
+  if (!fName && name) {
+    const parts = name.trim().split(/\s+/);
+    fName = parts[0] || '';
+    lName = parts.slice(1).join(' ') || 'Staff';
+  }
+
+  if (!email || !password || !fName || !lName || !phone) {
+    return res.status(400).json({ error: 'Please provide full name, email, phone number, and password.' });
+  }
+
+  if (password.length < 8) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters long.' });
+  }
+
+  const assignedRole = (role === 'OPERATIONS' || role === 'OPERATOR') ? 'OPERATIONS' : 'ADMIN';
+  const normalizedEmail = email.trim().toLowerCase();
+
+  try {
+    const existing = await pool.query('SELECT id FROM users WHERE email = $1', [normalizedEmail]);
+    if (existing.rows.length > 0) {
+      return res.status(409).json({ error: 'An account with this email address already exists. Please sign in.' });
+    }
+
+    const salt = await bcrypt.genSalt(12);
+    const passwordHash = await bcrypt.hash(password, salt);
+
+    const insertQuery = `
+      INSERT INTO users (email, password_hash, first_name, last_name, phone, role)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING id, email, first_name, last_name, date_of_birth, phone, role, created_at
+    `;
+    const result = await pool.query(insertQuery, [
+      normalizedEmail,
+      passwordHash,
+      fName,
+      lName,
+      phone.trim(),
+      assignedRole
+    ]);
+
+    const createdUser = result.rows[0];
+
+    const token = jwt.sign(
+      { id: createdUser.id, email: createdUser.email, role: createdUser.role },
+      JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+
+    res.status(201).json({
+      message: `${assignedRole === 'OPERATIONS' ? 'Operator' : 'Administrator'} account successfully created.`,
+      token,
+      user: {
+        id: createdUser.id,
+        email: createdUser.email,
+        firstName: createdUser.first_name,
+        lastName: createdUser.last_name,
+        phone: createdUser.phone,
+        role: createdUser.role
+      }
+    });
+  } catch (err) {
+    console.error('Error during admin/operator registration:', err);
+    res.status(500).json({ error: 'Database error: ' + err.message });
+  }
+});
+
+// 3c. Admin / Operator Sign In (Allows ADMIN and OPERATIONS Roles Only)
+app.post('/api/auth/admin/login', async (req, res) => {
+  const { email, password, role } = req.body;
+
+  if (!email || !password) {
+    return res.status(400).json({ error: 'Email and password are required.' });
+  }
+
+  const normalizedEmail = email.trim().toLowerCase();
+
+  try {
+    const userQuery = 'SELECT * FROM users WHERE email = $1';
+    const result = await pool.query(userQuery, [normalizedEmail]);
+
+    if (result.rows.length === 0) {
+      return res.status(401).json({ error: 'Invalid email or password.' });
+    }
+
+    const user = result.rows[0];
+
+    // Block customer accounts from admin portal
+    if (user.role === 'CUSTOMER') {
+      return res.status(403).json({
+        error: `Access Denied: Account '${user.email}' is a Customer account. Please sign in via the Customer Portal.`
+      });
+    }
+
+    // Role check: Only ADMIN and OPERATIONS are permitted
+    if (user.role !== 'ADMIN' && user.role !== 'OPERATIONS') {
+      return res.status(403).json({
+        error: `Access Denied: Account '${user.email}' does not have administrative or operational privileges.`
+      });
+    }
+
+    // If specific role requested, verify role matches or guide user
+    if (role) {
+      const targetRole = (role === 'OPERATIONS' || role === 'OPERATOR') ? 'OPERATIONS' : 'ADMIN';
+      if (user.role !== targetRole) {
+        return res.status(403).json({
+          error: `Role Mismatch: Account '${user.email}' is registered as '${user.role}'. Please toggle to '${user.role === 'ADMIN' ? 'Administrator' : 'Operator'}' to sign in.`
+        });
+      }
+    }
+
+    const passwordMatch = await bcrypt.compare(password, user.password_hash);
+    if (!passwordMatch) {
+      return res.status(401).json({ error: 'Invalid email or password.' });
+    }
+
+    const token = jwt.sign(
+      { id: user.id, email: user.email, role: user.role },
+      JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+
+    res.json({
+      message: 'Sign in successful.',
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        firstName: user.first_name,
+        lastName: user.last_name,
+        dateOfBirth: user.date_of_birth,
+        phone: user.phone,
+        role: user.role
+      }
+    });
+  } catch (err) {
+    console.error('Error during admin/operator login:', err);
+    res.status(500).json({ error: 'Database error: ' + err.message });
+  }
+});
+
+// ==========================================
+// ADMIN & OPERATIONS CLIENT MANAGEMENT
+// ==========================================
+
+// Authorize Admin or Operations roles
+function authorizeStaff(req, res, next) {
+  if (!req.user || (req.user.role !== 'ADMIN' && req.user.role !== 'OPERATIONS')) {
+    return res.status(403).json({ error: 'Access Denied: Administrative or operations privileges required.' });
+  }
+  next();
+}
+
+// 1. Get All Partner Clients from PostgreSQL
+app.get('/api/admin/clients', authenticateToken, authorizeStaff, async (req, res) => {
+  try {
+    const clientsQuery = 'SELECT * FROM clients ORDER BY created_at DESC';
+    const result = await pool.query(clientsQuery);
+    const clients = result.rows.map(row => ({
+      id: row.id,
+      name: row.name,
+      clientId: row.client_id || row.code,
+      code: row.code,
+      businessType: row.business_type || 'Bank',
+      status: row.status || (row.is_active ? 'A-ACTIVE' : 'IA-INACTIVE'),
+      address: row.address || '',
+      state: row.state || '',
+      contactEmail: row.contact_email || '',
+      isActive: row.is_active,
+      createdAt: row.created_at
+    }));
+    res.json(clients);
+  } catch (err) {
+    console.error('Error fetching clients:', err);
+    res.status(500).json({ error: 'Database error: ' + err.message });
+  }
+});
+
+// 2. Add New Client to PostgreSQL
+app.post('/api/admin/clients', authenticateToken, authorizeStaff, async (req, res) => {
+  const { name, clientId, businessType, status, address, state } = req.body;
+
+  if (!name || !name.trim()) {
+    return res.status(400).json({ error: 'Client Name is required.' });
+  }
+
+  // Auto-generate client id if empty
+  let generatedClientId = (clientId || '').trim();
+  if (!generatedClientId) {
+    const randomDigits = Math.floor(100000 + Math.random() * 900000);
+    generatedClientId = `CLI-${randomDigits}`;
+  }
+
+  const selectedBusinessType = businessType || 'Bank';
+  const selectedStatus = status || 'A-ACTIVE';
+  const isActive = selectedStatus === 'A-ACTIVE';
+
+  try {
+    // Check if code/client_id already exists to prevent duplicate key constraint
+    const existing = await pool.query(
+      'SELECT id FROM clients WHERE code = $1 OR client_id = $1',
+      [generatedClientId]
+    );
+    if (existing.rows.length > 0) {
+      const randomDigits = Math.floor(100000 + Math.random() * 900000);
+      generatedClientId = `CLI-${randomDigits}`;
+    }
+
+    const insertQuery = `
+      INSERT INTO clients (name, code, client_id, business_type, status, address, state, is_active)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      RETURNING *
+    `;
+    const result = await pool.query(insertQuery, [
+      name.trim(),
+      generatedClientId,
+      generatedClientId,
+      selectedBusinessType,
+      selectedStatus,
+      address ? address.trim() : '',
+      state ? state.trim() : '',
+      isActive
+    ]);
+
+    const created = result.rows[0];
+    res.status(201).json({
+      message: 'Client successfully added.',
+      client: {
+        id: created.id,
+        name: created.name,
+        clientId: created.client_id || created.code,
+        code: created.code,
+        businessType: created.business_type,
+        status: created.status,
+        address: created.address,
+        state: created.state,
+        isActive: created.is_active,
+        createdAt: created.created_at
+      }
+    });
+  } catch (err) {
+    console.error('Error creating client:', err);
+    res.status(500).json({ error: 'Database error: ' + err.message });
+  }
+});
+
+// 3. Update Client Information in PostgreSQL
+app.put('/api/admin/clients/:id', authenticateToken, authorizeStaff, async (req, res) => {
+  const { id } = req.params;
+  const { name, businessType, status, address, state } = req.body;
+
+  if (!name || !name.trim()) {
+    return res.status(400).json({ error: 'Client Name cannot be empty.' });
+  }
+
+  const selectedBusinessType = businessType || 'Bank';
+  const selectedStatus = status || 'A-ACTIVE';
+  const isActive = selectedStatus === 'A-ACTIVE';
+
+  try {
+    const updateQuery = `
+      UPDATE clients
+      SET name = $1, business_type = $2, status = $3, address = $4, state = $5, is_active = $6
+      WHERE id = $7
+      RETURNING *
+    `;
+    const result = await pool.query(updateQuery, [
+      name.trim(),
+      selectedBusinessType,
+      selectedStatus,
+      address ? address.trim() : '',
+      state ? state.trim() : '',
+      isActive,
+      id
+    ]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Client not found.' });
+    }
+
+    const updated = result.rows[0];
+    res.json({
+      message: 'Client profile successfully updated.',
+      client: {
+        id: updated.id,
+        name: updated.name,
+        clientId: updated.client_id || updated.code,
+        code: updated.code,
+        businessType: updated.business_type,
+        status: updated.status,
+        address: updated.address,
+        state: updated.state,
+        isActive: updated.is_active,
+        createdAt: updated.created_at
+      }
+    });
+  } catch (err) {
+    console.error('Error updating client:', err);
+    res.status(500).json({ error: 'Database error: ' + err.message });
+  }
+});
+
+// 4. Delete Client from PostgreSQL
+app.delete('/api/admin/clients/:id', authenticateToken, authorizeStaff, async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const deleteQuery = 'DELETE FROM clients WHERE id = $1 RETURNING id, name';
+    const result = await pool.query(deleteQuery, [id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Client not found.' });
+    }
+
+    res.json({
+      message: `Client "${result.rows[0].name}" successfully deleted.`,
+      deletedId: id
+    });
+  } catch (err) {
+    console.error('Error deleting client:', err);
+    res.status(500).json({ error: 'Database error: ' + err.message });
+  }
+});
+
 // 4. Get Current Customer's Policies from Database
 app.get('/api/policies', authenticateToken, async (req, res) => {
   try {
