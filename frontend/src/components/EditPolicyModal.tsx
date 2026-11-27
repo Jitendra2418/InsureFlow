@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Policy, Beneficiary } from '../types';
 import { useAuth } from '../context/AuthContext';
+import { CoverageCalculator } from './CoverageCalculator';
 import { 
   X, ShieldCheck, DollarSign, Building2, HeartHandshake, 
   UserPlus, Trash2, AlertCircle, Save 
@@ -212,77 +213,20 @@ export const EditPolicyModal: React.FC<EditPolicyModalProps> = ({
         {/* Modal Form */}
         <form onSubmit={handleSave} className="p-6 space-y-6">
 
-          {/* TAB 1: COVER AMOUNT */}
+          {/* TAB 1: COVER AMOUNT (INS-15 Actuarial Rating Engine) */}
           {activeTab === 'cover' && (
-            <div className="space-y-5 animate-fade-in">
-              <div>
-                <span className="text-xs font-bold uppercase tracking-wider text-[#8B9A6E] bg-[#8B9A6E]/10 px-2 py-0.5 rounded">
-                  Policy Limit Modification
-                </span>
-                <h3 className="text-base font-bold text-[#2E3523] mt-1">
-                  Adjust Principal Sum Coverage
-                </h3>
-                <p className="text-xs text-stone-600">
-                  Update coverage between $10,000 and $300,000 in $5,000 increments. Monthly premium will be automatically recalculated.
-                </p>
-              </div>
+            <div className="space-y-4 animate-fade-in">
+              <CoverageCalculator
+                coverAmount={coverAmount}
+                onCoverChange={setCoverAmount}
+              />
 
-              {/* Dynamic Rate Card */}
-              <div className="p-6 bg-[#EAE2D6] rounded-2xl border border-[#D8CBB9] text-center">
-                <p className="text-xs font-bold uppercase tracking-wider text-stone-600 mb-1">
-                  Selected Principal Sum
-                </p>
-                <div className="text-4xl font-extrabold text-[#2E3523] tracking-tight">
-                  ${coverAmount.toLocaleString()}
+              {policy.coverAmount !== coverAmount && (
+                <div className="p-3 bg-[#EAE2D6] rounded-xl border border-[#D8CBB9] text-xs font-semibold text-[#5A6644] flex items-center justify-between">
+                  <span>Current: ${policy.coverAmount.toLocaleString()} (${policy.monthlyPremium.toFixed(2)}/mo)</span>
+                  <span>&rarr; New: ${coverAmount.toLocaleString()} (${monthlyPremium.toFixed(2)}/mo) [Audit Logged]</span>
                 </div>
-                <div className="mt-3 inline-flex items-center space-x-2 bg-white px-4 py-1.5 rounded-full border border-[#D8CBB9] shadow-sm">
-                  <span className="text-xs text-stone-500 font-medium">New Monthly Premium:</span>
-                  <span className="text-sm font-bold text-[#5A6644]">
-                    ${monthlyPremium.toFixed(2)} / month
-                  </span>
-                </div>
-                {policy.coverAmount !== coverAmount && (
-                  <p className="mt-2 text-[11px] text-[#5A6644] font-semibold">
-                    Current: ${policy.coverAmount.toLocaleString()} (${policy.monthlyPremium.toFixed(2)}/mo) &rarr; Change will be saved in audit log
-                  </p>
-                )}
-              </div>
-
-              {/* Slider */}
-              <div>
-                <div className="flex justify-between text-xs font-semibold text-stone-600 mb-2">
-                  <span>Min: $10,000</span>
-                  <span className="text-[#8B9A6E] font-bold">Step: $5,000</span>
-                  <span>Max: $300,000</span>
-                </div>
-                <input
-                  type="range"
-                  min="10000"
-                  max="300000"
-                  step="5000"
-                  value={coverAmount}
-                  onChange={(e) => setCoverAmount(Number(e.target.value))}
-                  className="w-full h-2.5 bg-[#EEEEEE] rounded-lg appearance-none cursor-pointer accent-[#8B9A6E]"
-                />
-              </div>
-
-              {/* Quick Picks */}
-              <div className="grid grid-cols-4 gap-2">
-                {[50000, 100000, 150000, 250000].map((amount) => (
-                  <button
-                    key={amount}
-                    type="button"
-                    onClick={() => setCoverAmount(amount)}
-                    className={`py-2 px-3 text-xs font-bold rounded-xl border transition ${
-                      coverAmount === amount
-                        ? 'bg-[#8B9A6E] text-white border-[#8B9A6E]'
-                        : 'bg-white hover:bg-[#EAE2D6] text-stone-700 border-[#D8CBB9]'
-                    }`}
-                  >
-                    ${amount / 1000}k Cover
-                  </button>
-                ))}
-              </div>
+              )}
             </div>
           )}
 

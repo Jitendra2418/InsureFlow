@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Beneficiary } from '../types';
 import { apiRequest } from '../api';
+import { CoverageCalculator } from './CoverageCalculator';
 import { 
   X, Check, ShieldCheck, ArrowRight, ArrowLeft, 
   Sparkles, AlertCircle, Building2, UserPlus, Trash2, HeartHandshake
@@ -265,66 +266,13 @@ export const EnrollmentModal: React.FC<EnrollmentModalProps> = ({ isOpen, onClos
             </div>
           )}
 
-          {/* STEP 2: COVER SELECTION */}
+          {/* STEP 2: COVER SELECTION (INS-15 Rating Engine) */}
           {step === 2 && (
             <div className="space-y-6">
-              <div>
-                <span className="text-xs font-bold uppercase tracking-wider text-[#8B9A6E] bg-[#8B9A6E]/10 px-2 py-0.5 rounded">
-                  Accidental Death & Dismemberment
-                </span>
-                <h3 className="text-lg font-bold text-[#2E3523] mt-1">Select Principal Sum Coverage</h3>
-                <p className="text-xs text-stone-600">
-                  Select coverage between $10,000 and $300,000 in $5,000 steps.
-                </p>
-              </div>
-
-              {/* Cover Amount Highlight Box */}
-              <div className="p-6 bg-[#EAE2D6] rounded-2xl border border-[#D8CBB9] text-center">
-                <p className="text-xs font-bold uppercase tracking-wider text-stone-600 mb-1">Chosen Cover Amount</p>
-                <div className="text-4xl font-extrabold text-[#2E3523] tracking-tight">
-                  ${coverAmount.toLocaleString()}
-                </div>
-                <div className="mt-3 inline-flex items-center space-x-2 bg-white px-4 py-1.5 rounded-full border border-[#D8CBB9] shadow-sm">
-                  <span className="text-xs text-stone-500 font-medium">Monthly Premium:</span>
-                  <span className="text-sm font-bold text-[#5A6644]">${monthlyPremium.toFixed(2)} / month</span>
-                </div>
-              </div>
-
-              {/* Range Slider */}
-              <div>
-                <div className="flex justify-between text-xs font-semibold text-stone-600 mb-2">
-                  <span>Min: $10,000</span>
-                  <span className="text-[#8B9A6E] font-bold">Step: $5,000</span>
-                  <span>Max: $300,000</span>
-                </div>
-                <input
-                  type="range"
-                  min="10000"
-                  max="300000"
-                  step="5000"
-                  value={coverAmount}
-                  onChange={(e) => setCoverAmount(Number(e.target.value))}
-                  className="w-full h-2.5 bg-[#EEEEEE] rounded-lg appearance-none cursor-pointer accent-[#8B9A6E]"
-                />
-              </div>
-
-              {/* Quick Pick Buttons */}
-              <div className="grid grid-cols-4 gap-2 pt-2">
-                {[50000, 100000, 150000, 250000].map((amount) => (
-                  <button
-                    key={amount}
-                    type="button"
-                    onClick={() => setCoverAmount(amount)}
-                    className={`py-2 px-3 text-xs font-bold rounded-xl border transition ${
-                      coverAmount === amount
-                        ? 'bg-[#8B9A6E] text-white border-[#8B9A6E]'
-                        : 'bg-white hover:bg-[#EAE2D6] text-stone-700 border-[#D8CBB9]'
-                    }`}
-                  >
-                    ${(amount / 1000)}k Cover
-                  </button>
-                ))}
-              </div>
+              <CoverageCalculator
+                coverAmount={coverAmount}
+                onCoverChange={setCoverAmount}
+              />
 
               {/* Action Buttons */}
               <div className="flex justify-between items-center pt-4 border-t border-[#EAE2D6]">
