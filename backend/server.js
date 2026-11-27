@@ -616,7 +616,7 @@ app.get('/api/admin/products', async (req, res) => {
 // ADMIN CAMPAIGN MANAGEMENT
 // ==========================================
 
-// GET /api/admin/campaigns — list all campaigns with client & product names
+// GET /api/admin/campaigns — list all campaigns with client & product names and event count
 app.get('/api/admin/campaigns', authenticateToken, authorizeStaff, async (req, res) => {
   try {
     const query = `
@@ -633,10 +633,13 @@ app.get('/api/admin/campaigns', authenticateToken, authorizeStaff, async (req, r
         cl.name AS "clientName",
         c.product_id AS "productId",
         pr.name AS "productName",
-        pr.code AS "productCode"
+        pr.code AS "productCode",
+        COUNT(ce.id)::int AS "eventsCount"
       FROM campaigns c
       JOIN clients cl ON c.client_id = cl.id
       JOIN products pr ON c.product_id = pr.id
+      LEFT JOIN campaign_events ce ON ce.campaign_id = c.id
+      GROUP BY c.id, cl.name, pr.name, pr.code
       ORDER BY c.created_at DESC
     `;
     const result = await pool.query(query);
@@ -712,6 +715,156 @@ app.post('/api/admin/campaigns', authenticateToken, authorizeStaff, async (req, 
     });
   } catch (err) {
     console.error('Error creating campaign:', err);
+    res.status(500).json({ error: 'Database error: ' + err.message });
+  }
+});
+
+// ==========================================
+// ADMIN CAMPAIGN EVENTS MANAGEMENT
+// ==========================================
+
+// GET /api/admin/events — list events (optional ?campaignId=...)
+app.get('/api/admin/events', authenticateToken, authorizeStaff, async (req, res) => {
+  const { campaignId } = req.query;
+  try {
+    let query = `
+      SELECT
+        ce.id,
+        ce.campaign_id AS "campaignId",
+        ce.event_id AS "eventId",
+        ce.channel,
+        ce.media,
+        COALESCE(ce.scheduled_drop, ce.send_date) AS "scheduledDrop",
+        ce.final_description AS "finalDescription",
+        ce.event_type AS "eventType",
+        ce.quantity,
+        ce.created_at AS "createdAt",
+        c.campaign_id AS "campaignCode",
+        c.name AS "campaignName",
+        cl.name AS "clientName",
+        pr.name AS "productName"
+      FROM campaign_events ce
+      JOIN campaigns c ON ce.campaign_id = c.id
+      JOIN clients cl ON c.client_id = cl.id
+      JOIN products pr ON c.product_id = pr.id
+    `;
+    const params = [];
+    if (campaignId) {
+      query += ` WHERE ce.campaign_id = $1`;
+      params.push(campaignId);
+    }
+    query += ` ORDER BY ce.created_at DESC`;
+
+    const result = await pool.query(query, params);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching campaign events:', err);
+    res.status(500).json({ error: 'Database error: ' + err.message });
+  }
+});
+
+// POST /api/admin/events — create new campaign event
+app.post('/api/admin/events', authenticateToken, authorizeStaff, async (req, res) => {
+  const {
+    campaignId,
+    eventId,
+    channel,
+    media,
+    scheduledDrop,
+    finalDescription,
+    type,
+    quantity
+  } = req.body;
+
+  if (!campaignId) {
+    return res.status(400).json({ error: 'Campaign is required. Please select a campaign.' });
+  }
+  if (!channel) {
+    return res.status(400).json({ error: 'Channel is required.' });
+  }
+  if (!media) {
+    return res.status(400).json({ error: 'Media is required.' });
+  }
+  if (!scheduledDrop) {
+    return res.status(400).json({ error: 'Scheduled drop date is required.' });
+  }
+  if (!type) {
+    return res.status(400).json({ error: 'Type is required.' });
+  }
+
+  const parsedQty = parseInt(quantity || '0', 10);
+  if (isNaN(parsedQty) || parsedQty < 0) {
+    return res.status(400).json({ error: 'Quantity must be a valid positive number.' });
+  }
+
+  // Auto-generate eventId if empty or check collision
+  let finalEventId = (eventId || '').trim();
+  if (!finalEventId) {
+    const randomDigits = Math.floor(100000 + Math.random() * 900000);
+    finalEventId = `EVT-${randomDigits}`;
+  }
+
+  // Handle unique constraint collision
+  let suffix = 2;
+  while (suffix <= 99) {
+    const existing = await pool.query(
+      'SELECT id FROM campaign_events WHERE event_id = $1',
+      [finalEventId]
+    );
+    if (existing.rows.length === 0) break;
+    finalEventId = `${eventId || 'EVT'}-${suffix}`;
+    suffix++;
+  }
+
+  try {
+    const insertQuery = `
+      INSERT INTO campaign_events (
+        campaign_id, event_id, channel, media, scheduled_drop, send_date, final_description, event_type, quantity
+      )
+      VALUES ($1, $2, $3, $4, $5, $5, $6, $7, $8)
+      RETURNING
+        id,
+        campaign_id AS "campaignId",
+        event_id AS "eventId",
+        channel,
+        media,
+        scheduled_drop AS "scheduledDrop",
+        final_description AS "finalDescription",
+        event_type AS "eventType",
+        quantity,
+        created_at AS "createdAt"
+    `;
+    const result = await pool.query(insertQuery, [
+      campaignId,
+      finalEventId,
+      channel,
+      media,
+      scheduledDrop,
+      finalDescription || null,
+      type,
+      parsedQty
+    ]);
+
+    const createdEvent = result.rows[0];
+    const joinedRes = await pool.query(`
+      SELECT c.campaign_id AS "campaignCode", c.name AS "campaignName", cl.name AS "clientName", pr.name AS "productName"
+      FROM campaigns c
+      JOIN clients cl ON c.client_id = cl.id
+      JOIN products pr ON c.product_id = pr.id
+      WHERE c.id = $1
+    `, [campaignId]);
+
+    const enriched = {
+      ...createdEvent,
+      ...(joinedRes.rows[0] || {})
+    };
+
+    res.status(201).json({
+      message: `Event "${finalEventId}" successfully created.`,
+      event: enriched
+    });
+  } catch (err) {
+    console.error('Error creating campaign event:', err);
     res.status(500).json({ error: 'Database error: ' + err.message });
   }
 });
