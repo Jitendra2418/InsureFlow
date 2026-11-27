@@ -1,6 +1,11 @@
 import { jsPDF } from 'jspdf';
 import { Policy, User } from '../types';
 
+/**
+ * INS-18: Insurance Certificate & Policy Documentation Generator
+ * Generates an official, high-resolution A4 certificate with insured details,
+ * coverage schedule, designated primary/contingent beneficiaries, and digital seal.
+ */
 export function generateInsuranceCertificate(policy: Policy, user: User | null): void {
   // A4 dimensions: 210mm x 297mm
   const doc = new jsPDF({
