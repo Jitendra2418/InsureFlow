@@ -1,13 +1,13 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Client, Product, Campaign } from '../types';
+import { Client, Product, Campaign, CampaignEvent } from '../types';
 import { apiRequest } from '../api';
 import { 
   Building2, Megaphone, ShieldCheck, PlusCircle, Search, RefreshCw, 
   LogOut, CheckCircle2, AlertCircle, MapPin, 
   Sparkles, Sliders, Hash, Pencil, Trash2, X, AlertTriangle,
-  Calendar
+  Calendar, CalendarDays, Send, ArrowRight
 } from 'lucide-react';
 
 const US_STATES = [
@@ -25,8 +25,8 @@ export const AdminDashboard: React.FC = () => {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
 
-  // Active top-level tab: 'clients' or 'campaigns'
-  const [activeTab, setActiveTab] = useState<'clients' | 'campaigns'>('clients');
+  // Active top-level tab: 'clients' | 'campaigns' | 'events'
+  const [activeTab, setActiveTab] = useState<'clients' | 'campaigns' | 'events'>('clients');
 
   // Helper to generate a random client ID
   const generateNewClientId = () => {
@@ -192,6 +192,112 @@ export const AdminDashboard: React.FC = () => {
     }
   };
 
+  // ── Events tab state ──────────────────────────────────────────
+  const [selectedCampaign, setSelectedCampaign] = useState<Campaign | null>(null);
+  const [events, setEvents] = useState<CampaignEvent[]>([]);
+  const [isEventsLoading, setIsEventsLoading] = useState<boolean>(false);
+  const [eventViewFilter, setEventViewFilter] = useState<'CURRENT' | 'ALL'>('CURRENT');
+
+  // Helper to generate a new Event ID
+  const generateNewEventId = (campaignCode?: string) => {
+    const randomDigits = Math.floor(100000 + Math.random() * 900000);
+    if (campaignCode) {
+      const prefix = campaignCode.split('-')[0] || 'EVT';
+      return `${prefix}-EVT-${randomDigits.toString().slice(-4)}`;
+    }
+    return `EVT-${randomDigits}`;
+  };
+
+  // Event form fields
+  const [eventCampaignId, setEventCampaignId] = useState<string>('');
+  const [eventChannel, setEventChannel] = useState<string>('Telemarketting');
+  const [eventMedia, setEventMedia] = useState<string>('mail');
+  const [eventScheduledDrop, setEventScheduledDrop] = useState<string>('');
+  const [eventFinalDescription, setEventFinalDescription] = useState<string>('');
+  const [eventType, setEventType] = useState<string>('mailing');
+  const [eventId, setEventId] = useState<string>(generateNewEventId());
+  const [eventQuantity, setEventQuantity] = useState<string>('');
+
+  // Event feedback
+  const [eventFormSuccess, setEventFormSuccess] = useState<string>('');
+  const [eventFormError, setEventFormError] = useState<string>('');
+  const [isEventSubmitting, setIsEventSubmitting] = useState<boolean>(false);
+  const [eventSearchTerm, setEventSearchTerm] = useState<string>('');
+
+  // Select campaign for events and jump to events tab
+  const handleSelectCampaignForEvents = (camp: Campaign) => {
+    setSelectedCampaign(camp);
+    setEventCampaignId(camp.id);
+    setEventId(generateNewEventId(camp.campaignId));
+    setActiveTab('events');
+  };
+
+  // Load events from backend
+  const loadEvents = async (campaignIdToLoad?: string) => {
+    setIsEventsLoading(true);
+    try {
+      const targetId = campaignIdToLoad !== undefined ? campaignIdToLoad : (eventViewFilter === 'CURRENT' && selectedCampaign ? selectedCampaign.id : '');
+      const url = targetId ? `/admin/events?campaignId=${targetId}` : '/admin/events';
+      const data = await apiRequest<CampaignEvent[]>(url);
+      setEvents(data);
+    } catch (err) {
+      console.error('Failed to load events:', err);
+    } finally {
+      setIsEventsLoading(false);
+    }
+  };
+
+  // Handle Event form submit
+  const handleCreateEvent = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setEventFormError('');
+    setEventFormSuccess('');
+
+    if (!eventCampaignId) {
+      setEventFormError('Please select a campaign for this event.');
+      return;
+    }
+    if (!eventScheduledDrop) {
+      setEventFormError('Please select a scheduled drop date.');
+      return;
+    }
+    if (!eventQuantity || parseInt(eventQuantity, 10) < 0) {
+      setEventFormError('Please enter a valid quantity.');
+      return;
+    }
+
+    setIsEventSubmitting(true);
+    try {
+      const res = await apiRequest<{ message: string; event: CampaignEvent }>('/admin/events', {
+        method: 'POST',
+        body: JSON.stringify({
+          campaignId: eventCampaignId,
+          eventId,
+          channel: eventChannel,
+          media: eventMedia,
+          scheduledDrop: eventScheduledDrop,
+          finalDescription: eventFinalDescription.trim(),
+          type: eventType,
+          quantity: parseInt(eventQuantity, 10)
+        })
+      });
+
+      setEventFormSuccess(res.message || `Event "${eventId}" successfully created in database!`);
+      // Reset form fields
+      setEventFinalDescription('');
+      setEventScheduledDrop('');
+      setEventQuantity('');
+      setEventId(generateNewEventId(selectedCampaign?.campaignId));
+      await loadEvents();
+      await loadCampaigns();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to create event in database.';
+      setEventFormError(msg);
+    } finally {
+      setIsEventSubmitting(false);
+    }
+  };
+
   // ── Fetch clients from backend ──────────────────────────────────
   const loadClients = async () => {
     setIsLoading(true);
@@ -211,11 +317,14 @@ export const AdminDashboard: React.FC = () => {
     loadCampaigns();
   }, []);
 
-  // Re-fetch products & campaigns every time the Campaign tab becomes active
+  // Re-fetch data every time the active tab changes
   useEffect(() => {
     if (activeTab === 'campaigns') {
       loadProducts();
       loadCampaigns();
+    } else if (activeTab === 'events') {
+      loadCampaigns();
+      loadEvents();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
@@ -472,8 +581,31 @@ export const AdminDashboard: React.FC = () => {
             <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${
               activeTab === 'campaigns' ? 'bg-white/20 text-white' : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
             }`}>
-              New
+              {campaigns.length}
             </span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('events')}
+            className={`inline-flex items-center space-x-2.5 px-6 py-3 rounded-2xl text-sm font-bold transition-all ${
+              activeTab === 'events'
+                ? 'bg-[#5A6644] text-white shadow-md shadow-[#5A6644]/25 scale-[1.01]'
+                : 'bg-[#EAE2D6] text-stone-700 hover:bg-[#ded4c6] hover:text-stone-900 border border-[#D8CBB9]'
+            }`}
+          >
+            <CalendarDays className="w-4 h-4" />
+            <span>Events</span>
+            {selectedCampaign ? (
+              <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-600 text-white border border-emerald-400">
+                {selectedCampaign.campaignId}
+              </span>
+            ) : (
+              <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${
+                activeTab === 'events' ? 'bg-white/20 text-white' : 'bg-[#D8CBB9] text-stone-700'
+              }`}>
+                {events.length}
+              </span>
+            )}
           </button>
         </div>
 
@@ -1090,12 +1222,14 @@ export const AdminDashboard: React.FC = () => {
                       <th className="py-3 px-4">End Month</th>
                       <th className="py-3 px-4">Description</th>
                       <th className="py-3 px-4">Created On</th>
+                      <th className="py-3 px-4 text-center">Events</th>
+                      <th className="py-3 px-4 text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#D8CBB9]/60 text-xs text-stone-800">
                     {isCampaignsLoading ? (
                       <tr>
-                        <td colSpan={8} className="py-8 text-center text-stone-500">
+                        <td colSpan={10} className="py-8 text-center text-stone-500">
                           <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-[#5A6644]" />
                           Loading campaigns from PostgreSQL database...
                         </td>
@@ -1107,7 +1241,7 @@ export const AdminDashboard: React.FC = () => {
                         (c.description || '').toLowerCase().includes(campSearchTerm.toLowerCase())
                       ).length === 0 ? (
                       <tr>
-                        <td colSpan={8} className="py-8 text-center text-stone-500">
+                        <td colSpan={10} className="py-8 text-center text-stone-500">
                           {campSearchTerm ? 'No campaigns match your search.' : 'No campaigns yet. Create one above!'}
                         </td>
                       </tr>
@@ -1131,8 +1265,9 @@ export const AdminDashboard: React.FC = () => {
                             const dt = new Date(d);
                             return dt.toLocaleDateString('en-US', { year: 'numeric', month: 'short' });
                           };
+                          const isSelected = selectedCampaign?.id === camp.id;
                           return (
-                            <tr key={camp.id} className="hover:bg-white/40 transition">
+                            <tr key={camp.id} className={`hover:bg-white/40 transition ${isSelected ? 'bg-[#8B9A6E]/15 border-l-4 border-l-[#5A6644]' : ''}`}>
                               <td className="py-3.5 px-4 font-mono font-bold text-stone-700">
                                 <span className="bg-white/80 border border-[#D8CBB9] px-2 py-0.5 rounded-md">
                                   {camp.campaignId}
@@ -1157,9 +1292,497 @@ export const AdminDashboard: React.FC = () => {
                               <td className="py-3.5 px-4 text-stone-500 text-[11px]">
                                 {camp.createdAt ? new Date(camp.createdAt).toLocaleDateString() : '—'}
                               </td>
+                              <td className="py-3.5 px-4 text-center">
+                                <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold ${
+                                  (camp.eventsCount ?? 0) > 0
+                                    ? 'bg-blue-100 text-blue-800 border border-blue-300'
+                                    : 'bg-stone-100 text-stone-500 border border-stone-200'
+                                }`}>
+                                  {camp.eventsCount ?? 0} {(camp.eventsCount ?? 0) === 1 ? 'event' : 'events'}
+                                </span>
+                              </td>
+                              <td className="py-3.5 px-4 text-right">
+                                <button
+                                  type="button"
+                                  onClick={() => handleSelectCampaignForEvents(camp)}
+                                  className={`inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition shadow-sm ${
+                                    isSelected
+                                      ? 'bg-emerald-700 hover:bg-emerald-800 text-white'
+                                      : 'bg-[#5A6644] hover:bg-[#495436] text-white'
+                                  }`}
+                                  title="Select this campaign to create or view its events"
+                                >
+                                  <CalendarDays className="w-3.5 h-3.5" />
+                                  <span>{isSelected ? 'Active (Events)' : 'Manage Events'}</span>
+                                  <ArrowRight className="w-3 h-3" />
+                                </button>
+                              </td>
                             </tr>
                           );
                         })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 3: EVENTS */}
+        {activeTab === 'events' && (
+          <div className="space-y-6 animate-in fade-in duration-200">
+            {/* Active Campaign Context Banner */}
+            <div className={`rounded-3xl p-6 sm:p-7 border shadow-md transition-all ${
+              selectedCampaign 
+                ? 'bg-gradient-to-r from-[#5A6644] to-[#454f34] text-white border-[#5A6644]'
+                : 'bg-[#EAE2D6] border-[#D8CBB9] text-stone-800'
+            }`}>
+              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                <div className="space-y-1">
+                  <div className="flex items-center space-x-2 text-xs font-bold uppercase tracking-wider">
+                    <CalendarDays className="w-4 h-4" />
+                    <span className={selectedCampaign ? 'text-[#D8E2C8]' : 'text-[#5A6644]'}>
+                      {selectedCampaign ? 'Target Campaign for Events' : 'No Campaign Selected Yet'}
+                    </span>
+                  </div>
+
+                  {selectedCampaign ? (
+                    <div>
+                      <h2 className="text-2xl font-extrabold tracking-tight">
+                        {selectedCampaign.campaignId} <span className="text-sm font-normal text-[#E2EBD3]">({selectedCampaign.name})</span>
+                      </h2>
+                      <div className="flex flex-wrap items-center gap-3 mt-1.5 text-xs text-[#E2EBD3]">
+                        <span>Client: <strong className="text-white">{selectedCampaign.clientName}</strong></span>
+                        <span>•</span>
+                        <span>Product: <strong className="text-white">{selectedCampaign.productName}</strong></span>
+                        <span>•</span>
+                        <span>Status: <strong className="text-white">{selectedCampaign.status}</strong></span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div>
+                      <h2 className="text-xl font-bold text-[#2E3523]">
+                        Select a Campaign to Start Creating Events
+                      </h2>
+                      <p className="text-xs text-stone-600 mt-1 max-w-xl">
+                        Events are organized under a parent campaign. Select one using the dropdown below or pick one from the Campaign tab.
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Quick Campaign Switcher / Selector */}
+                <div className="flex items-center space-x-2.5 w-full md:w-auto">
+                  <div className="bg-white/95 rounded-2xl p-1.5 border border-[#D8CBB9] shadow-sm flex items-center space-x-2 text-stone-800 w-full sm:w-auto">
+                    <span className="text-xs font-bold text-stone-600 pl-2 hidden sm:inline">Campaign:</span>
+                    <select
+                      value={eventCampaignId}
+                      onChange={(e) => {
+                        const campId = e.target.value;
+                        setEventCampaignId(campId);
+                        const found = campaigns.find(c => c.id === campId) || null;
+                        setSelectedCampaign(found);
+                        if (found) {
+                          setEventId(generateNewEventId(found.campaignId));
+                          loadEvents(found.id);
+                        } else {
+                          loadEvents();
+                        }
+                      }}
+                      className="bg-transparent text-xs font-bold text-[#2E3523] px-2 py-1.5 focus:outline-none cursor-pointer"
+                    >
+                      <option value="">— Select Target Campaign —</option>
+                      {campaigns.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.campaignId} ({c.clientName} - {c.productName})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <button
+                    onClick={() => setActiveTab('campaigns')}
+                    className={`px-3.5 py-2.5 rounded-2xl text-xs font-bold transition shadow-sm whitespace-nowrap flex items-center space-x-1 ${
+                      selectedCampaign 
+                        ? 'bg-white/20 hover:bg-white/30 text-white border border-white/30' 
+                        : 'bg-[#5A6644] hover:bg-[#495436] text-white'
+                    }`}
+                  >
+                    <span>View Campaigns</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Event Form Feedback Banners */}
+            {eventFormSuccess && (
+              <div className="p-4 bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm rounded-2xl flex items-center justify-between shadow-sm">
+                <div className="flex items-center space-x-2">
+                  <CheckCircle2 className="w-5 h-5 flex-shrink-0 text-emerald-600" />
+                  <span>{eventFormSuccess}</span>
+                </div>
+                <button onClick={() => setEventFormSuccess('')} className="text-emerald-700 hover:text-emerald-900 p-1">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+
+            {eventFormError && (
+              <div className="p-4 bg-red-50 border border-red-200 text-red-700 text-sm rounded-2xl flex items-center justify-between shadow-sm">
+                <div className="flex items-center space-x-2">
+                  <AlertCircle className="w-5 h-5 flex-shrink-0 text-red-500" />
+                  <span>{eventFormError}</span>
+                </div>
+                <button onClick={() => setEventFormError('')} className="text-red-700 hover:text-red-900 p-1">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+
+            {/* Create Campaign Event Form */}
+            <div className="bg-[#EAE2D6] rounded-3xl p-6 sm:p-8 border border-[#D8CBB9] shadow-md">
+              <div className="flex items-center space-x-2 text-[#5A6644] text-xs font-bold uppercase tracking-wider mb-1">
+                <CalendarDays className="w-4 h-4" />
+                <span>Event Registration</span>
+              </div>
+              <h2 className="text-2xl font-bold text-[#2E3523]">Register Campaign Event</h2>
+              <p className="text-xs text-stone-600 mt-0.5 mb-6">
+                Fill in the event channel, media delivery, drop date, type, and volume under{' '}
+                <strong className="text-[#2E3523]">{selectedCampaign ? selectedCampaign.campaignId : 'the selected campaign'}</strong>.
+              </p>
+
+              <form onSubmit={handleCreateEvent} className="space-y-5">
+                {/* Row 1: Target Campaign + Event ID */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                  {/* Campaign Dropdown */}
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1.5">
+                      Parent Campaign <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      required
+                      value={eventCampaignId}
+                      onChange={(e) => {
+                        const campId = e.target.value;
+                        setEventCampaignId(campId);
+                        const found = campaigns.find(c => c.id === campId) || null;
+                        setSelectedCampaign(found);
+                        if (found) {
+                          setEventId(generateNewEventId(found.campaignId));
+                        }
+                      }}
+                      className="block w-full px-3 py-2.5 bg-white border border-[#D8CBB9] rounded-xl text-stone-900 focus:outline-none focus:ring-2 focus:ring-[#8B9A6E] text-sm font-medium"
+                    >
+                      <option value="">— Select Campaign —</option>
+                      {campaigns.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.campaignId} — {c.clientName} [{c.productName}]
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Event ID (Auto Generated) */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="block text-xs font-bold uppercase tracking-wider text-stone-700">
+                        Event ID <span className="text-stone-400 font-normal lowercase">(auto generated)</span>
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setEventId(generateNewEventId(selectedCampaign?.campaignId))}
+                        className="text-[11px] font-bold text-[#5A6644] hover:underline flex items-center space-x-1"
+                      >
+                        <RefreshCw className="w-3 h-3" />
+                        <span>Regenerate ID</span>
+                      </button>
+                    </div>
+                    <div className="relative rounded-xl shadow-sm">
+                      <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-stone-400">
+                        <Hash className="h-4 w-4" />
+                      </div>
+                      <input
+                        type="text"
+                        readOnly
+                        value={eventId}
+                        className="block w-full pl-10 pr-3 py-2.5 bg-stone-100 border border-[#D8CBB9] rounded-xl text-stone-700 font-mono text-sm cursor-not-allowed font-semibold"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Row 2: Channel + Media */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                  {/* Channel Dropdown */}
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1.5">
+                      Channel <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={eventChannel}
+                      onChange={(e) => setEventChannel(e.target.value)}
+                      className="block w-full px-3 py-2.5 bg-white border border-[#D8CBB9] rounded-xl text-stone-900 focus:outline-none focus:ring-2 focus:ring-[#8B9A6E] text-sm font-medium"
+                    >
+                      <option value="Telemarketting">Telemarketting</option>
+                      <option value="Banner">Banner</option>
+                      <option value="Collection">Collection</option>
+                      <option value="Letter">Letter</option>
+                      <option value="NewsLetter">NewsLetter</option>
+                    </select>
+                  </div>
+
+                  {/* Media Dropdown */}
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1.5">
+                      Media <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={eventMedia}
+                      onChange={(e) => setEventMedia(e.target.value)}
+                      className="block w-full px-3 py-2.5 bg-white border border-[#D8CBB9] rounded-xl text-stone-900 focus:outline-none focus:ring-2 focus:ring-[#8B9A6E] text-sm font-medium"
+                    >
+                      <option value="mail">mail</option>
+                      <option value="direct mail">direct mail</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Row 3: Scheduled Drop Date + Type + Quantity */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+                  {/* Scheduled Drop Date */}
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1.5">
+                      Scheduled Drop <span className="text-red-500">*</span>
+                    </label>
+                    <div className="relative rounded-xl shadow-sm">
+                      <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-stone-400">
+                        <Calendar className="h-4 w-4" />
+                      </div>
+                      <input
+                        type="date"
+                        required
+                        value={eventScheduledDrop}
+                        onChange={(e) => setEventScheduledDrop(e.target.value)}
+                        className="block w-full pl-10 pr-3 py-2.5 bg-white border border-[#D8CBB9] rounded-xl text-stone-900 focus:outline-none focus:ring-2 focus:ring-[#8B9A6E] text-sm"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Type Dropdown */}
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1.5">
+                      Type <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={eventType}
+                      onChange={(e) => setEventType(e.target.value)}
+                      className="block w-full px-3 py-2.5 bg-white border border-[#D8CBB9] rounded-xl text-stone-900 focus:outline-none focus:ring-2 focus:ring-[#8B9A6E] text-sm font-medium"
+                    >
+                      <option value="mailing">mailing</option>
+                      <option value="Remailing">Remailing</option>
+                      <option value="follow up mail">follow up mail</option>
+                      <option value="BSM(benefit statement mailing)">BSM(benefit statement mailing)</option>
+                    </select>
+                  </div>
+
+                  {/* Quantity */}
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1.5">
+                      Quantity <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="number"
+                      required
+                      min="0"
+                      placeholder="e.g. 10000"
+                      value={eventQuantity}
+                      onChange={(e) => setEventQuantity(e.target.value)}
+                      className="block w-full px-3 py-2.5 bg-white border border-[#D8CBB9] rounded-xl text-stone-900 focus:outline-none focus:ring-2 focus:ring-[#8B9A6E] text-sm font-medium"
+                    />
+                  </div>
+                </div>
+
+                {/* Final Description */}
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1.5">
+                    Final Description
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={eventFinalDescription}
+                    onChange={(e) => setEventFinalDescription(e.target.value)}
+                    placeholder="Enter final event description, delivery instructions, creative versions, or target audience details..."
+                    className="block w-full px-3 py-2.5 bg-white border border-[#D8CBB9] rounded-xl text-stone-900 placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-[#8B9A6E] text-sm resize-none"
+                  />
+                </div>
+
+                {/* Submit */}
+                <div className="pt-2 flex justify-end">
+                  <button
+                    type="submit"
+                    disabled={isEventSubmitting}
+                    className="w-full sm:w-auto inline-flex justify-center items-center space-x-2 py-3 px-6 border border-transparent rounded-xl shadow-md text-sm font-bold text-white bg-[#5A6644] hover:bg-[#495436] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#5A6644] transition hover:scale-[1.01] active:scale-[0.99] disabled:opacity-50"
+                  >
+                    <Send className="w-4 h-4" />
+                    <span>{isEventSubmitting ? 'Registering Event...' : 'Create Campaign Event'}</span>
+                  </button>
+                </div>
+              </form>
+            </div>
+
+            {/* Campaign Events Directory Table */}
+            <div className="bg-[#EAE2D6] rounded-3xl p-6 sm:p-8 border border-[#D8CBB9] shadow-md">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
+                <div>
+                  <h3 className="text-xl font-bold text-[#2E3523]">Campaign Events Directory</h3>
+                  <p className="text-xs text-stone-600 mt-0.5">
+                    {selectedCampaign 
+                      ? `Events under campaign "${selectedCampaign.campaignId}" (${selectedCampaign.clientName}).`
+                      : 'All marketing drop and communication events registered across campaigns in PostgreSQL.'}
+                  </p>
+                </div>
+
+                {/* Filters, Search, Refresh */}
+                <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
+                  {selectedCampaign && (
+                    <select
+                      value={eventViewFilter}
+                      onChange={(e) => {
+                        const val = e.target.value as 'CURRENT' | 'ALL';
+                        setEventViewFilter(val);
+                        if (val === 'CURRENT') {
+                          loadEvents(selectedCampaign.id);
+                        } else {
+                          loadEvents('');
+                        }
+                      }}
+                      className="bg-white border border-[#D8CBB9] rounded-xl px-3 py-2 text-xs text-stone-800 font-medium focus:outline-none focus:ring-2 focus:ring-[#8B9A6E]"
+                    >
+                      <option value="CURRENT">This Campaign Only ({selectedCampaign.campaignId})</option>
+                      <option value="ALL">All Campaigns</option>
+                    </select>
+                  )}
+
+                  <div className="relative flex-1 sm:w-56">
+                    <Search className="absolute left-3 top-2.5 h-4 w-4 text-stone-400" />
+                    <input
+                      type="text"
+                      placeholder="Search events, channels, types..."
+                      value={eventSearchTerm}
+                      onChange={(e) => setEventSearchTerm(e.target.value)}
+                      className="w-full pl-9 pr-3 py-2 bg-white border border-[#D8CBB9] rounded-xl text-xs text-stone-900 placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-[#8B9A6E]"
+                    />
+                  </div>
+
+                  <button
+                    onClick={() => loadEvents()}
+                    disabled={isEventsLoading}
+                    title="Refresh Events"
+                    className="p-2 bg-white border border-[#D8CBB9] rounded-xl text-stone-600 hover:text-[#5A6644] hover:bg-stone-50 transition"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${isEventsLoading ? 'animate-spin' : ''}`} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Table */}
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="border-b border-[#D8CBB9] text-[11px] font-bold uppercase tracking-wider text-stone-600">
+                      <th className="py-3 px-4">Event ID</th>
+                      <th className="py-3 px-4">Parent Campaign</th>
+                      <th className="py-3 px-4">Channel</th>
+                      <th className="py-3 px-4">Media</th>
+                      <th className="py-3 px-4">Type</th>
+                      <th className="py-3 px-4">Scheduled Drop</th>
+                      <th className="py-3 px-4">Quantity</th>
+                      <th className="py-3 px-4">Final Description</th>
+                      <th className="py-3 px-4">Created On</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#D8CBB9]/60 text-xs text-stone-800">
+                    {isEventsLoading ? (
+                      <tr>
+                        <td colSpan={9} className="py-8 text-center text-stone-500">
+                          <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-[#5A6644]" />
+                          Loading campaign events from PostgreSQL database...
+                        </td>
+                      </tr>
+                    ) : events.filter(ev =>
+                        ev.eventId.toLowerCase().includes(eventSearchTerm.toLowerCase()) ||
+                        (ev.campaignCode || '').toLowerCase().includes(eventSearchTerm.toLowerCase()) ||
+                        ev.channel.toLowerCase().includes(eventSearchTerm.toLowerCase()) ||
+                        ev.media.toLowerCase().includes(eventSearchTerm.toLowerCase()) ||
+                        ev.eventType.toLowerCase().includes(eventSearchTerm.toLowerCase()) ||
+                        (ev.finalDescription || '').toLowerCase().includes(eventSearchTerm.toLowerCase())
+                      ).length === 0 ? (
+                      <tr>
+                        <td colSpan={9} className="py-8 text-center text-stone-500">
+                          {eventSearchTerm 
+                            ? 'No events match your search.' 
+                            : selectedCampaign
+                              ? `No events registered under "${selectedCampaign.campaignId}" yet. Use the form above to add one!`
+                              : 'No events registered yet. Select a campaign and create one above!'}
+                        </td>
+                      </tr>
+                    ) : (
+                      events
+                        .filter(ev =>
+                          ev.eventId.toLowerCase().includes(eventSearchTerm.toLowerCase()) ||
+                          (ev.campaignCode || '').toLowerCase().includes(eventSearchTerm.toLowerCase()) ||
+                          ev.channel.toLowerCase().includes(eventSearchTerm.toLowerCase()) ||
+                          ev.media.toLowerCase().includes(eventSearchTerm.toLowerCase()) ||
+                          ev.eventType.toLowerCase().includes(eventSearchTerm.toLowerCase()) ||
+                          (ev.finalDescription || '').toLowerCase().includes(eventSearchTerm.toLowerCase())
+                        )
+                        .map((ev) => (
+                          <tr key={ev.id} className="hover:bg-white/40 transition">
+                            <td className="py-3.5 px-4 font-mono font-bold text-stone-700">
+                              <span className="bg-white/80 border border-[#D8CBB9] px-2 py-0.5 rounded-md">
+                                {ev.eventId}
+                              </span>
+                            </td>
+                            <td className="py-3.5 px-4 font-bold text-[#2E3523]">
+                              <div className="flex flex-col">
+                                <span>{ev.campaignCode || '—'}</span>
+                                {ev.clientName && (
+                                  <span className="text-[11px] font-normal text-stone-500">
+                                    {ev.clientName}
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                            <td className="py-3.5 px-4">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-[#8B9A6E]/15 text-[#3D472E]">
+                                {ev.channel}
+                              </span>
+                            </td>
+                            <td className="py-3.5 px-4">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-stone-200 text-stone-700">
+                                {ev.media}
+                              </span>
+                            </td>
+                            <td className="py-3.5 px-4 font-medium text-stone-800">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold bg-blue-50 text-blue-800 border border-blue-200">
+                                {ev.eventType}
+                              </span>
+                            </td>
+                            <td className="py-3.5 px-4 font-mono text-stone-700">
+                              {ev.scheduledDrop ? new Date(ev.scheduledDrop).toLocaleDateString() : '—'}
+                            </td>
+                            <td className="py-3.5 px-4 font-bold text-stone-800">
+                              {ev.quantity ? ev.quantity.toLocaleString() : '0'}
+                            </td>
+                            <td className="py-3.5 px-4 text-stone-500 max-w-xs truncate" title={ev.finalDescription}>
+                              {ev.finalDescription || '—'}
+                            </td>
+                            <td className="py-3.5 px-4 text-stone-500 text-[11px]">
+                              {ev.createdAt ? new Date(ev.createdAt).toLocaleDateString() : '—'}
+                            </td>
+                          </tr>
+                        ))
                     )}
                   </tbody>
                 </table>

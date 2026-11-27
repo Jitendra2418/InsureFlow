@@ -80,4 +80,22 @@ export interface Campaign {
   startDate: string;
   endDate: string;
   createdAt: string;
+  eventsCount?: number;
+}
+
+export interface CampaignEvent {
+  id: string;
+  campaignId: string;
+  eventId: string;
+  channel: 'Telemarketting' | 'Banner' | 'Collection' | 'Letter' | 'NewsLetter' | string;
+  media: 'mail' | 'direct mail' | string;
+  scheduledDrop: string;
+  finalDescription?: string;
+  eventType: 'mailing' | 'Remailing' | 'follow up mail' | 'BSM(benefit statement mailing)' | string;
+  quantity: number;
+  createdAt: string;
+  campaignCode?: string;
+  campaignName?: string;
+  clientName?: string;
+  productName?: string;
 }
