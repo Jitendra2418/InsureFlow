@@ -37,6 +37,16 @@ export interface Beneficiary {
   guardianName?: string;
 }
 
+export interface PolicyAuditLog {
+  id: string;
+  action: string;
+  old_value?: Record<string, unknown> | null;
+  new_value?: Record<string, unknown> | null;
+  changed_at: string;
+  first_name?: string;
+  last_name?: string;
+}
+
 export interface Policy {
   id: string;
   policyNumber: string;
@@ -46,6 +56,8 @@ export interface Policy {
   productCode: 'DD' | 'HP' | 'RC';
   coverAmount: number;
   monthlyPremium: number;
+  annualPremium?: number;
+  dailyRate?: number;
   status: 'ACTIVE' | 'CANCELLED' | 'LAPSED';
   effectiveDate: string;
   addressLine1: string;
@@ -56,6 +68,7 @@ export interface Policy {
   beneficiaries: Beneficiary[];
   campaignCode?: string;
   certificateKey?: string;
+  auditLogs?: PolicyAuditLog[];
   createdAt: string;
 }
 

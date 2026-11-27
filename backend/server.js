@@ -1327,6 +1327,116 @@ app.get('/api/policies', authenticateToken, async (req, res) => {
   }
 });
 
+// 4b. GET /api/policies/:id — Fetch Single Policy with Full Actuarial & Audit Details (INS-19)
+app.get('/api/policies/:id', authenticateToken, async (req, res) => {
+  const policyId = req.params.id;
+  try {
+    const policyQuery = `
+      SELECT p.*, pr.name as product_name, pr.code as product_code, cc.code as campaign_code
+      FROM policies p
+      JOIN products pr ON p.product_id = pr.id
+      LEFT JOIN campaign_codes cc ON p.campaign_code_id = cc.id
+      WHERE p.id = $1 AND p.user_id = $2
+    `;
+    const policyRes = await pool.query(policyQuery, [policyId, req.user.id]);
+    if (policyRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Policy not found or unauthorized.' });
+    }
+    const row = policyRes.rows[0];
+
+    // Fetch Beneficiaries
+    const benRes = await pool.query(`
+      SELECT id, first_name, last_name, relationship, percentage, phone, is_primary, guardian_name
+      FROM beneficiaries
+      WHERE policy_id = $1 AND is_active = true
+      ORDER BY is_primary DESC, percentage DESC, created_at ASC
+    `, [policyId]);
+
+    // Fetch Audit Logs
+    let auditLogs = [];
+    try {
+      const auditRes = await pool.query(`
+        SELECT pal.id, pal.action, pal.old_value, pal.new_value, pal.changed_at,
+               u.first_name, u.last_name
+        FROM policy_audit_logs pal
+        LEFT JOIN users u ON pal.changed_by_user_id = u.id
+        WHERE pal.policy_id = $1
+        ORDER BY pal.changed_at DESC
+      `, [policyId]);
+      auditLogs = auditRes.rows;
+    } catch (auditErr) {
+      console.warn('Audit fetch warning:', auditErr.message);
+    }
+
+    const monthlyPrem = parseFloat(row.monthly_premium);
+    const annualPrem = parseFloat((monthlyPrem * 12).toFixed(2));
+    const dailyMicro = parseFloat(((monthlyPrem * 12) / 365).toFixed(2));
+
+    res.json({
+      id: row.id,
+      policyNumber: row.policy_number,
+      userId: row.user_id,
+      productId: row.product_id,
+      productName: row.product_name,
+      productCode: row.product_code,
+      campaignCode: row.campaign_code || '',
+      coverAmount: parseFloat(row.cover_amount),
+      monthlyPremium: monthlyPrem,
+      annualPremium: annualPrem,
+      dailyRate: dailyMicro,
+      status: row.status,
+      effectiveDate: row.effective_date ? row.effective_date.toISOString().split('T')[0] : '',
+      cancellationDate: row.cancellation_date ? row.cancellation_date.toISOString().split('T')[0] : null,
+      cancellationReason: row.cancellation_reason || null,
+      addressLine1: row.address_line1,
+      addressLine2: row.address_line2,
+      city: row.city,
+      state: row.state,
+      zipCode: row.zip_code,
+      beneficiaries: benRes.rows.map(b => ({
+        id: b.id,
+        firstName: b.first_name,
+        lastName: b.last_name,
+        relationship: b.relationship,
+        percentage: parseFloat(b.percentage),
+        phone: b.phone,
+        isPrimary: b.is_primary !== false,
+        guardianName: b.guardian_name || ''
+      })),
+      auditLogs,
+      createdAt: row.created_at
+    });
+  } catch (err) {
+    console.error('Error fetching policy details:', err);
+    res.status(500).json({ error: 'Database error: ' + err.message });
+  }
+});
+
+// 4c. GET /api/policies/:id/audit-logs — Dedicated Policy Audit History (INS-19)
+app.get('/api/policies/:id/audit-logs', authenticateToken, async (req, res) => {
+  const policyId = req.params.id;
+  try {
+    const check = await pool.query('SELECT id FROM policies WHERE id = $1 AND user_id = $2', [policyId, req.user.id]);
+    if (check.rows.length === 0) {
+      return res.status(404).json({ error: 'Policy not found or unauthorized.' });
+    }
+
+    const auditRes = await pool.query(`
+      SELECT pal.id, pal.action, pal.old_value, pal.new_value, pal.changed_at,
+             u.first_name, u.last_name
+      FROM policy_audit_logs pal
+      LEFT JOIN users u ON pal.changed_by_user_id = u.id
+      WHERE pal.policy_id = $1
+      ORDER BY pal.changed_at DESC
+    `, [policyId]);
+
+    res.json(auditRes.rows);
+  } catch (err) {
+    console.error('Error fetching policy audit history:', err);
+    res.status(500).json({ error: 'Database error: ' + err.message });
+  }
+});
+
 // 5. Validate Campaign Code (Multi-use: any customer can enroll via the campaign)
 app.post('/api/enrollment/validate-code', async (req, res) => {
   const { code } = req.body;

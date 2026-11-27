@@ -3,19 +3,21 @@ import { useAuth } from '../context/AuthContext';
 import { Navbar } from '../components/Navbar';
 import { EnrollmentModal } from '../components/EnrollmentModal';
 import { EditPolicyModal } from '../components/EditPolicyModal';
+import { PolicyDetailsModal } from '../components/PolicyDetailsModal';
 import { Policy } from '../types';
 import { generateInsuranceCertificate } from '../utils/pdfCertificate';
 import { 
   ShieldCheck, FileText, Download, CheckCircle, 
   Calendar, Users, ArrowUpRight, 
   Sparkles, Layers, DollarSign, Clock, ShieldAlert,
-  Edit3, MapPin
+  Edit3, MapPin, Eye
 } from 'lucide-react';
 
 export const CustomerDashboard: React.FC = () => {
   const { user, policies, cancelPolicy } = useAuth();
   const [isEnrollModalOpen, setIsEnrollModalOpen] = useState<boolean>(false);
   const [editingPolicy, setEditingPolicy] = useState<Policy | null>(null);
+  const [viewingPolicy, setViewingPolicy] = useState<Policy | null>(null);
   const [justEnrolledNumber, setJustEnrolledNumber] = useState<string | null>(null);
   const [downloadNotice, setDownloadNotice] = useState<string | null>(null);
   const [updateNotice, setUpdateNotice] = useState<string | null>(null);
@@ -242,19 +244,24 @@ export const CustomerDashboard: React.FC = () => {
                   <div>
                     {/* Top row: Status & Policy Number */}
                     <div className="flex items-center justify-between pb-4 border-b border-[#EEEEEE]">
-                      <div className="flex items-center space-x-2.5">
-                        <div className="w-10 h-10 rounded-xl bg-[#8B9A6E]/15 text-[#5A6644] flex items-center justify-center">
+                      <button
+                        type="button"
+                        onClick={() => setViewingPolicy(policy)}
+                        className="flex items-center space-x-2.5 text-left group cursor-pointer"
+                      >
+                        <div className="w-10 h-10 rounded-xl bg-[#8B9A6E]/15 text-[#5A6644] group-hover:bg-[#8B9A6E] group-hover:text-white transition flex items-center justify-center">
                           <FileText className="w-5 h-5 stroke-[2.2]" />
                         </div>
                         <div>
-                          <p className="text-[11px] font-mono font-bold text-stone-500 uppercase tracking-wider">
-                            Policy #{policy.policyNumber}
+                          <p className="text-[11px] font-mono font-bold text-stone-500 uppercase tracking-wider group-hover:text-[#5A6644] transition flex items-center space-x-1">
+                            <span>Policy #{policy.policyNumber}</span>
+                            <Eye className="w-3 h-3 text-stone-400 group-hover:text-[#5A6644]" />
                           </p>
-                          <h3 className="text-base font-bold text-[#2E3523] leading-snug">
+                          <h3 className="text-base font-bold text-[#2E3523] leading-snug group-hover:underline">
                             {policy.productName}
                           </h3>
                         </div>
-                      </div>
+                      </button>
 
                       <span className={`px-2.5 py-1 rounded-full text-xs font-bold tracking-wide ${
                         policy.status === 'ACTIVE'
@@ -326,10 +333,18 @@ export const CustomerDashboard: React.FC = () => {
 
                   {/* Actions Bar */}
                   <div className="pt-4 border-t border-[#EEEEEE] flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center space-x-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        onClick={() => setViewingPolicy(policy)}
+                        className="inline-flex items-center space-x-1.5 text-xs font-bold text-[#2E3523] bg-[#EAE2D6] hover:bg-[#D8CBB9] px-3.5 py-2 rounded-xl transition border border-[#D8CBB9] shadow-xs cursor-pointer"
+                      >
+                        <Eye className="w-3.5 h-3.5 text-[#8B9A6E]" />
+                        <span>View Policy Details</span>
+                      </button>
+
                       <button
                         onClick={() => handleDownloadCertificate(policy)}
-                        className="inline-flex items-center space-x-1.5 text-xs font-bold text-[#5A6644] hover:text-[#2E3523] bg-[#EAE2D6]/50 hover:bg-[#EAE2D6] px-3.5 py-2 rounded-xl transition border border-[#D8CBB9]"
+                        className="inline-flex items-center space-x-1.5 text-xs font-bold text-[#5A6644] hover:text-[#2E3523] bg-white hover:bg-[#F7F2EB] px-3.5 py-2 rounded-xl transition border border-[#D8CBB9]"
                       >
                         <Download className="w-3.5 h-3.5 text-[#8B9A6E]" />
                         <span>Download Certificate</span>
@@ -338,10 +353,10 @@ export const CustomerDashboard: React.FC = () => {
                       {policy.status === 'ACTIVE' && (
                         <button
                           onClick={() => setEditingPolicy(policy)}
-                          className="inline-flex items-center space-x-1.5 text-xs font-bold text-stone-700 hover:text-stone-900 bg-white hover:bg-[#EAE2D6] px-3.5 py-2 rounded-xl transition border border-[#D8CBB9] shadow-sm"
+                          className="inline-flex items-center space-x-1.5 text-xs font-bold text-stone-700 hover:text-stone-900 bg-white hover:bg-[#F7F2EB] px-3 py-2 rounded-xl transition border border-[#D8CBB9] shadow-xs"
                         >
                           <Edit3 className="w-3.5 h-3.5 text-[#8B9A6E]" />
-                          <span>Edit Policy Details</span>
+                          <span>Edit</span>
                         </button>
                       )}
                     </div>
@@ -353,7 +368,7 @@ export const CustomerDashboard: React.FC = () => {
                             cancelPolicy(policy.id);
                           }
                         }}
-                        className="text-xs font-semibold text-stone-400 hover:text-red-600 transition py-1 px-2"
+                        className="text-xs font-semibold text-stone-400 hover:text-red-600 transition py-1 px-2 cursor-pointer"
                       >
                         Cancel Policy
                       </button>
@@ -518,6 +533,14 @@ export const CustomerDashboard: React.FC = () => {
           setUpdateNotice(msg);
           setTimeout(() => setUpdateNotice(null), 8000);
         }}
+      />
+
+      {/* Policy Details Modal (INS-19) */}
+      <PolicyDetailsModal
+        isOpen={!!viewingPolicy}
+        policy={viewingPolicy}
+        onClose={() => setViewingPolicy(null)}
+        onEditPolicy={(p) => setEditingPolicy(p)}
       />
     </div>
   );
