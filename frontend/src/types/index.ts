@@ -100,4 +100,32 @@ export interface CampaignEvent {
   campaignName?: string;
   clientName?: string;
   productName?: string;
+  segmentsCount?: number;
+  allocatedTarget?: number;
+}
+
+export interface Segment {
+  id: string;
+  eventId: string;
+  name: string;
+  insuranceStatus: 'I' | 'UI';
+  clientId: string;
+  clientName?: string;
+  clientCode?: string;
+  state: string;
+  spokenKey: string;
+  target: number;
+  description?: string;
+  createdAt: string;
+  eventCode?: string;
+  eventQuantity?: number;
+  eventChannel?: string;
+  campaignCode?: string;
+  campaignName?: string;
+}
+
+export interface CustomerStats {
+  insuredCount: number;
+  uninsuredCount: number;
+  totalCustomers: number;
 }
