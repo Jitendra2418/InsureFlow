@@ -1,13 +1,13 @@
 ﻿import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Client, Product, Campaign, CampaignEvent } from '../types';
+import { Client, Product, Campaign, CampaignEvent, Segment, CustomerStats } from '../types';
 import { apiRequest } from '../api';
 import { 
   Building2, Megaphone, ShieldCheck, PlusCircle, Search, RefreshCw, 
   LogOut, CheckCircle2, AlertCircle, MapPin, 
   Sparkles, Sliders, Hash, Pencil, Trash2, X, AlertTriangle,
-  Calendar, CalendarDays, Send, ArrowRight
+  Calendar, CalendarDays, Send, ArrowRight, Layers, Target, Users
 } from 'lucide-react';
 
 const US_STATES = [
@@ -25,8 +25,8 @@ export const AdminDashboard: React.FC = () => {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
 
-  // Active top-level tab: 'clients' | 'campaigns' | 'events'
-  const [activeTab, setActiveTab] = useState<'clients' | 'campaigns' | 'events'>('clients');
+  // Active top-level tab: 'clients' | 'campaigns' | 'events' | 'segments'
+  const [activeTab, setActiveTab] = useState<'clients' | 'campaigns' | 'events' | 'segments'>('clients');
 
   // Helper to generate a random client ID
   const generateNewClientId = () => {
@@ -298,6 +298,127 @@ export const AdminDashboard: React.FC = () => {
     }
   };
 
+  // ── Segments tab state (INS-6) ──────────────────────────────────
+  const [selectedEvent, setSelectedEvent] = useState<CampaignEvent | null>(null);
+  const [segments, setSegments] = useState<Segment[]>([]);
+  const [isSegmentsLoading, setIsSegmentsLoading] = useState<boolean>(false);
+  const [segmentViewFilter, setSegmentViewFilter] = useState<'CURRENT' | 'ALL'>('CURRENT');
+  const [customerStats, setCustomerStats] = useState<CustomerStats>({ insuredCount: 0, uninsuredCount: 0, totalCustomers: 0 });
+
+  // Segment form fields
+  const [segmentInsuranceStatus, setSegmentInsuranceStatus] = useState<'I' | 'UI'>('UI');
+  const [segmentClientId, setSegmentClientId] = useState<string>('');
+  const [segmentTarget, setSegmentTarget] = useState<string>('');
+  const [segmentDescription, setSegmentDescription] = useState<string>('');
+
+  // Segment feedback
+  const [segmentFormSuccess, setSegmentFormSuccess] = useState<string>('');
+  const [segmentFormError, setSegmentFormError] = useState<string>('');
+  const [isSegmentSubmitting, setIsSegmentSubmitting] = useState<boolean>(false);
+  const [segmentSearchTerm, setSegmentSearchTerm] = useState<string>('');
+
+  // Select event for segments and jump to segments tab
+  const handleSelectEventForSegments = (ev: CampaignEvent) => {
+    setSelectedEvent(ev);
+    setActiveTab('segments');
+  };
+
+  // Calculate live spoken key preview
+  const selectedSegmentClient = clients.find(c => c.id === segmentClientId);
+  const clientStateCode = (selectedSegmentClient?.state && selectedSegmentClient.state.trim()) 
+    ? selectedSegmentClient.state.trim().toUpperCase() 
+    : 'ALL';
+  const clientBankCode = selectedSegmentClient 
+    ? (selectedSegmentClient.name || selectedSegmentClient.code).replace(/[^a-zA-Z0-9]/g, '').toUpperCase() 
+    : 'BANK';
+  const spokenKeyPreview = `${segmentInsuranceStatus}-${clientBankCode}-${clientStateCode}`;
+
+  // Calculate remaining target capacity for selected event
+  const currentEventSegments = selectedEvent ? segments.filter(s => s.eventId === selectedEvent.id) : [];
+  const currentEventAllocatedTarget = currentEventSegments.reduce((sum, s) => sum + (s.target || 0), 0);
+  const currentEventCapacity = selectedEvent ? selectedEvent.quantity : 0;
+  const currentEventRemainingTarget = Math.max(0, currentEventCapacity - currentEventAllocatedTarget);
+
+  // Load customer stats
+  const loadCustomerStats = async () => {
+    try {
+      const stats = await apiRequest<CustomerStats>('/admin/segments/customer-stats');
+      setCustomerStats(stats);
+    } catch (err) {
+      console.error('Failed to load customer stats:', err);
+    }
+  };
+
+  // Load segments
+  const loadSegments = async (eventIdToLoad?: string) => {
+    setIsSegmentsLoading(true);
+    try {
+      const targetId = eventIdToLoad !== undefined 
+        ? eventIdToLoad 
+        : (segmentViewFilter === 'CURRENT' && selectedEvent ? selectedEvent.id : '');
+      const url = targetId ? `/admin/segments?eventId=${targetId}` : '/admin/segments';
+      const data = await apiRequest<Segment[]>(url);
+      setSegments(data);
+    } catch (err) {
+      console.error('Failed to load segments:', err);
+    } finally {
+      setIsSegmentsLoading(false);
+    }
+  };
+
+  // Handle Segment form submit
+  const handleCreateSegment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSegmentFormError('');
+    setSegmentFormSuccess('');
+
+    if (!selectedEvent) {
+      setSegmentFormError('Please select an event first before creating segments.');
+      return;
+    }
+    if (!segmentClientId) {
+      setSegmentFormError('Please select a Bank (Client).');
+      return;
+    }
+    const parsedTarget = parseInt(segmentTarget, 10);
+    if (isNaN(parsedTarget) || parsedTarget <= 0) {
+      setSegmentFormError('Target must be a positive number greater than 0.');
+      return;
+    }
+    if (currentEventAllocatedTarget + parsedTarget > currentEventCapacity) {
+      setSegmentFormError(
+        `Target (${parsedTarget.toLocaleString()}) exceeds available event capacity! Already allocated: ${currentEventAllocatedTarget.toLocaleString()}, Event quantity: ${currentEventCapacity.toLocaleString()}, Remaining: ${currentEventRemainingTarget.toLocaleString()}.`
+      );
+      return;
+    }
+
+    setIsSegmentSubmitting(true);
+    try {
+      const res = await apiRequest<{ message: string; segment: Segment }>('/admin/segments', {
+        method: 'POST',
+        body: JSON.stringify({
+          eventId: selectedEvent.id,
+          insuranceStatus: segmentInsuranceStatus,
+          clientId: segmentClientId,
+          target: parsedTarget,
+          description: segmentDescription.trim()
+        })
+      });
+
+      setSegmentFormSuccess(res.message || `Segment "${spokenKeyPreview}" created successfully!`);
+      setSegmentTarget('');
+      setSegmentDescription('');
+      await loadSegments();
+      await loadEvents();
+      await loadCustomerStats();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to create segment in database.';
+      setSegmentFormError(msg);
+    } finally {
+      setIsSegmentSubmitting(false);
+    }
+  };
+
   // ── Fetch clients from backend ──────────────────────────────────
   const loadClients = async () => {
     setIsLoading(true);
@@ -325,6 +446,11 @@ export const AdminDashboard: React.FC = () => {
     } else if (activeTab === 'events') {
       loadCampaigns();
       loadEvents();
+    } else if (activeTab === 'segments') {
+      loadClients();
+      loadEvents();
+      loadSegments();
+      loadCustomerStats();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
@@ -604,6 +730,29 @@ export const AdminDashboard: React.FC = () => {
                 activeTab === 'events' ? 'bg-white/20 text-white' : 'bg-[#D8CBB9] text-stone-700'
               }`}>
                 {events.length}
+              </span>
+            )}
+          </button>
+
+          <button
+            onClick={() => setActiveTab('segments')}
+            className={`inline-flex items-center space-x-2.5 px-6 py-3 rounded-2xl text-sm font-bold transition-all ${
+              activeTab === 'segments'
+                ? 'bg-[#5A6644] text-white shadow-md shadow-[#5A6644]/25 scale-[1.01]'
+                : 'bg-[#EAE2D6] text-stone-700 hover:bg-[#ded4c6] hover:text-stone-900 border border-[#D8CBB9]'
+            }`}
+          >
+            <Layers className="w-4 h-4" />
+            <span>Segment</span>
+            {selectedEvent ? (
+              <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-600 text-white border border-emerald-400">
+                {selectedEvent.eventId}
+              </span>
+            ) : (
+              <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${
+                activeTab === 'segments' ? 'bg-white/20 text-white' : 'bg-[#D8CBB9] text-stone-700'
+              }`}>
+                {segments.length}
               </span>
             )}
           </button>
@@ -1700,12 +1849,14 @@ export const AdminDashboard: React.FC = () => {
                       <th className="py-3 px-4">Quantity</th>
                       <th className="py-3 px-4">Final Description</th>
                       <th className="py-3 px-4">Created On</th>
+                      <th className="py-3 px-4 text-center">Segments</th>
+                      <th className="py-3 px-4 text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#D8CBB9]/60 text-xs text-stone-800">
                     {isEventsLoading ? (
                       <tr>
-                        <td colSpan={9} className="py-8 text-center text-stone-500">
+                        <td colSpan={11} className="py-8 text-center text-stone-500">
                           <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-[#5A6644]" />
                           Loading campaign events from PostgreSQL database...
                         </td>
@@ -1719,7 +1870,7 @@ export const AdminDashboard: React.FC = () => {
                         (ev.finalDescription || '').toLowerCase().includes(eventSearchTerm.toLowerCase())
                       ).length === 0 ? (
                       <tr>
-                        <td colSpan={9} className="py-8 text-center text-stone-500">
+                        <td colSpan={11} className="py-8 text-center text-stone-500">
                           {eventSearchTerm 
                             ? 'No events match your search.' 
                             : selectedCampaign
@@ -1780,6 +1931,515 @@ export const AdminDashboard: React.FC = () => {
                             </td>
                             <td className="py-3.5 px-4 text-stone-500 text-[11px]">
                               {ev.createdAt ? new Date(ev.createdAt).toLocaleDateString() : '—'}
+                            </td>
+                            <td className="py-3.5 px-4 text-center">
+                              <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold ${
+                                (ev.segmentsCount ?? 0) > 0
+                                  ? 'bg-blue-100 text-blue-800 border border-blue-300'
+                                  : 'bg-stone-100 text-stone-500 border border-stone-200'
+                              }`}>
+                                {ev.segmentsCount ?? 0} {(ev.segmentsCount ?? 0) === 1 ? 'segment' : 'segments'}
+                              </span>
+                            </td>
+                            <td className="py-3.5 px-4 text-right">
+                              <button
+                                type="button"
+                                onClick={() => handleSelectEventForSegments(ev)}
+                                className={`inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition shadow-sm ${
+                                  selectedEvent?.id === ev.id
+                                    ? 'bg-emerald-700 hover:bg-emerald-800 text-white'
+                                    : 'bg-[#5A6644] hover:bg-[#495436] text-white'
+                                }`}
+                                title="Select this event to manage its segments"
+                              >
+                                <Layers className="w-3.5 h-3.5" />
+                                <span>{selectedEvent?.id === ev.id ? 'Active (Segment)' : 'Manage Segments'}</span>
+                                <ArrowRight className="w-3 h-3" />
+                              </button>
+                            </td>
+                          </tr>
+                        ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 4: SEGMENT (INS-6) */}
+        {activeTab === 'segments' && (
+          <div className="space-y-6 animate-in fade-in duration-200">
+            {/* Active Event Context Banner */}
+            <div className={`rounded-3xl p-6 sm:p-7 border shadow-md transition-all ${
+              selectedEvent 
+                ? 'bg-gradient-to-r from-[#5A6644] to-[#454f34] text-white border-[#5A6644]'
+                : 'bg-[#EAE2D6] border-[#D8CBB9] text-stone-800'
+            }`}>
+              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                <div className="space-y-1">
+                  <div className="flex items-center space-x-2">
+                    <span className={`text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full ${
+                      selectedEvent ? 'bg-emerald-500/20 text-emerald-200 border border-emerald-400/40' : 'bg-stone-300 text-stone-700'
+                    }`}>
+                      {selectedEvent ? 'Active Parent Event' : 'No Event Selected'}
+                    </span>
+                    {selectedEvent && (
+                      <span className="text-xs font-mono font-bold text-white bg-white/20 px-2 py-0.5 rounded-md">
+                        {selectedEvent.eventId}
+                      </span>
+                    )}
+                  </div>
+                  <h2 className="text-xl sm:text-2xl font-black tracking-tight">
+                    {selectedEvent ? (
+                      <>Segments for Event: <span className="underline decoration-[#8B9A6E]">{selectedEvent.eventId}</span></>
+                    ) : (
+                      'Please Select an Event to Manage Segments'
+                    )}
+                  </h2>
+                  <p className={`text-xs max-w-2xl ${selectedEvent ? 'text-[#D8E2C8]' : 'text-stone-600'}`}>
+                    {selectedEvent 
+                      ? `Parent Campaign: ${selectedEvent.campaignCode || selectedEvent.campaignName || '—'} • Channel: ${selectedEvent.channel} • Media: ${selectedEvent.media} • Total Event Quantity: ${selectedEvent.quantity.toLocaleString()}`
+                      : 'Each event can have multiple targeted segments. Go to the Events tab and click "Manage Segments" or select an event below to allocate audience targets.'
+                    }
+                  </p>
+                </div>
+
+                {selectedEvent && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="bg-white/10 backdrop-blur-md px-4 py-2 rounded-2xl border border-white/20 text-right">
+                      <p className="text-[10px] uppercase font-bold text-[#D8E2C8]">Capacity Allocated</p>
+                      <p className="text-sm font-extrabold text-white">
+                        {currentEventAllocatedTarget.toLocaleString()} / {currentEventCapacity.toLocaleString()}
+                        <span className="text-xs font-normal text-emerald-300 ml-1.5">
+                          ({currentEventCapacity > 0 ? Math.round((currentEventAllocatedTarget / currentEventCapacity) * 100) : 0}%)
+                        </span>
+                      </p>
+                      <p className="text-[10px] text-stone-200">
+                        Remaining: <span className="font-bold text-emerald-300">{currentEventRemainingTarget.toLocaleString()}</span>
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('events')}
+                      className="px-3 py-2 bg-white/20 hover:bg-white/30 text-white rounded-xl text-xs font-bold transition flex items-center space-x-1"
+                    >
+                      <span>Switch Event</span>
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Customer Stats Cards Banner (Insured vs Uninsured) */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="bg-[#EAE2D6] p-4 rounded-2xl border border-[#D8CBB9] shadow-sm flex items-center justify-between">
+                <div>
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-stone-600">Total Enrolled / Insured (I)</p>
+                  <p className="text-xl font-black text-emerald-700 mt-1">{customerStats.insuredCount.toLocaleString()}</p>
+                  <p className="text-[10px] text-stone-500 mt-0.5">Customers enrolled in policies</p>
+                </div>
+                <div className="w-10 h-10 rounded-xl bg-emerald-100 border border-emerald-300 flex items-center justify-center text-emerald-700">
+                  <ShieldCheck className="w-5 h-5" />
+                </div>
+              </div>
+
+              <div className="bg-[#EAE2D6] p-4 rounded-2xl border border-[#D8CBB9] shadow-sm flex items-center justify-between">
+                <div>
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-stone-600">Uninsured Users (UI)</p>
+                  <p className="text-xl font-black text-amber-700 mt-1">{customerStats.uninsuredCount.toLocaleString()}</p>
+                  <p className="text-[10px] text-stone-500 mt-0.5">Logged-in users without policy</p>
+                </div>
+                <div className="w-10 h-10 rounded-xl bg-amber-100 border border-amber-300 flex items-center justify-center text-amber-700">
+                  <Users className="w-5 h-5" />
+                </div>
+              </div>
+
+              <div className="bg-[#EAE2D6] p-4 rounded-2xl border border-[#D8CBB9] shadow-sm flex items-center justify-between">
+                <div>
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-stone-600">Total Customers</p>
+                  <p className="text-xl font-black text-[#2E3523] mt-1">{customerStats.totalCustomers.toLocaleString()}</p>
+                  <p className="text-[10px] text-stone-500 mt-0.5">All customer accounts in system</p>
+                </div>
+                <div className="w-10 h-10 rounded-xl bg-[#8B9A6E]/20 border border-[#8B9A6E]/40 flex items-center justify-center text-[#5A6644]">
+                  <Target className="w-5 h-5" />
+                </div>
+              </div>
+            </div>
+
+            {/* Segment Creation Card */}
+            <div className="bg-[#EAE2D6] border border-[#D8CBB9] rounded-3xl p-6 sm:p-8 shadow-sm">
+              <div className="flex items-center justify-between pb-5 border-b border-[#D8CBB9]/80 mb-6">
+                <div>
+                  <h3 className="text-lg font-bold text-[#2E3523] flex items-center space-x-2">
+                    <PlusCircle className="w-5 h-5 text-[#5A6644]" />
+                    <span>Create Segment for Event</span>
+                  </h3>
+                  <p className="text-xs text-stone-600 mt-0.5">
+                    Define targeted audience segments with insurance status, bank, and state. The target sum must not exceed event quantity.
+                  </p>
+                </div>
+                {selectedEvent && (
+                  <span className="hidden sm:inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[#8B9A6E]/20 text-[#3D472E] border border-[#8B9A6E]/40 font-mono">
+                    Event: {selectedEvent.eventId}
+                  </span>
+                )}
+              </div>
+
+              {/* Feedback Alerts */}
+              {segmentFormError && (
+                <div className="mb-6 p-4 bg-red-50 border border-red-200 text-red-700 text-xs rounded-2xl flex items-center space-x-2.5">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0 text-red-500" />
+                  <span>{segmentFormError}</span>
+                </div>
+              )}
+              {segmentFormSuccess && (
+                <div className="mb-6 p-4 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs rounded-2xl flex items-center space-x-2.5">
+                  <CheckCircle2 className="w-4 h-4 flex-shrink-0 text-emerald-600" />
+                  <span>{segmentFormSuccess}</span>
+                </div>
+              )}
+
+              {/* Segment Creation Form */}
+              <form onSubmit={handleCreateSegment} className="space-y-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                  {/* Parent Event (Dropdown or locked) */}
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1.5">
+                      Parent Event <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={selectedEvent?.id || ''}
+                      onChange={(e) => {
+                        const found = events.find(ev => ev.id === e.target.value);
+                        setSelectedEvent(found || null);
+                      }}
+                      className="w-full px-3.5 py-2.5 bg-white border border-[#D8CBB9] rounded-xl text-xs text-stone-900 focus:outline-none focus:ring-2 focus:ring-[#8B9A6E] font-medium"
+                    >
+                      <option value="">-- Choose Campaign Event --</option>
+                      {events.map((ev) => (
+                        <option key={ev.id} value={ev.id}>
+                          {ev.eventId} ({ev.campaignCode || 'No Campaign'} • {ev.channel} • Qty: {ev.quantity.toLocaleString()})
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-[10px] text-stone-500 mt-1">
+                      {selectedEvent 
+                        ? `Available capacity: ${currentEventRemainingTarget.toLocaleString()} of ${currentEventCapacity.toLocaleString()}`
+                        : 'Select an event to attach segments to.'}
+                    </p>
+                  </div>
+
+                  {/* Insurance Status (Dropdown I vs UI) */}
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1.5">
+                      Insurance Status <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={segmentInsuranceStatus}
+                      onChange={(e) => setSegmentInsuranceStatus(e.target.value as 'I' | 'UI')}
+                      className="w-full px-3.5 py-2.5 bg-white border border-[#D8CBB9] rounded-xl text-xs text-stone-900 focus:outline-none focus:ring-2 focus:ring-[#8B9A6E] font-medium"
+                    >
+                      <option value="UI">UI - Uninsured (Logged-in users without policy)</option>
+                      <option value="I">I - Insured (Users enrolled in insurance policy)</option>
+                    </select>
+                    <p className="text-[10px] text-stone-500 mt-1">
+                      {segmentInsuranceStatus === 'I' 
+                        ? `Enrolled customers currently in database: ${customerStats.insuredCount}`
+                        : `Uninsured customer accounts in database: ${customerStats.uninsuredCount}`}
+                    </p>
+                  </div>
+
+                  {/* Bank (Client dropdown) */}
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1.5">
+                      Bank (Client) <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={segmentClientId}
+                      onChange={(e) => setSegmentClientId(e.target.value)}
+                      className="w-full px-3.5 py-2.5 bg-white border border-[#D8CBB9] rounded-xl text-xs text-stone-900 focus:outline-none focus:ring-2 focus:ring-[#8B9A6E] font-medium"
+                      required
+                    >
+                      <option value="">-- Select Partner Bank --</option>
+                      {clients.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name} ({c.state || 'No State'} • {c.code})
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-[10px] text-stone-500 mt-1">
+                      {selectedSegmentClient 
+                        ? `Selected: ${selectedSegmentClient.name} • State: ${selectedSegmentClient.state || 'Not specified'}`
+                        : 'Select client to load bank name & state'}
+                    </p>
+                  </div>
+
+                  {/* State (Auto-derived from Client, Read-only display) */}
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1.5">
+                      State (From Bank Profile)
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        readOnly
+                        value={selectedSegmentClient?.state || (segmentClientId ? 'ALL' : '—')}
+                        className="w-full px-3.5 py-2.5 bg-stone-100 border border-[#D8CBB9] rounded-xl text-xs font-bold text-stone-700 cursor-not-allowed"
+                      />
+                      <MapPin className="w-4 h-4 text-stone-400 absolute right-3 top-3" />
+                    </div>
+                    <p className="text-[10px] text-stone-500 mt-1">
+                      State is automatically extracted from the bank's registered profile.
+                    </p>
+                  </div>
+
+                  {/* Spoken Key (Auto-generated preview) */}
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1.5">
+                      Spoken Key (Auto-Generated)
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        readOnly
+                        value={segmentClientId ? spokenKeyPreview : '—'}
+                        placeholder="e.g. UI-AXIS-TX"
+                        className="w-full px-3.5 py-2.5 bg-emerald-50/70 border border-emerald-300 rounded-xl text-xs font-mono font-bold text-emerald-900 cursor-not-allowed"
+                      />
+                      <Sparkles className="w-4 h-4 text-emerald-600 absolute right-3 top-3" />
+                    </div>
+                    <p className="text-[10px] text-emerald-700 font-medium mt-1">
+                      Format: [Status]-[Bank]-[State] (e.g. {spokenKeyPreview})
+                    </p>
+                  </div>
+
+                  {/* Target (Numerical input with max validation) */}
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1.5">
+                      Target Audience Count <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      max={currentEventRemainingTarget > 0 ? currentEventRemainingTarget : undefined}
+                      value={segmentTarget}
+                      onChange={(e) => setSegmentTarget(e.target.value)}
+                      placeholder={selectedEvent ? `Max remaining: ${currentEventRemainingTarget}` : 'Enter target quantity'}
+                      className={`w-full px-3.5 py-2.5 bg-white border rounded-xl text-xs text-stone-900 focus:outline-none focus:ring-2 font-medium ${
+                        selectedEvent && parseInt(segmentTarget || '0', 10) > currentEventRemainingTarget
+                          ? 'border-red-400 focus:ring-red-400 bg-red-50/30'
+                          : 'border-[#D8CBB9] focus:ring-[#8B9A6E]'
+                      }`}
+                      required
+                    />
+                    <div className="flex justify-between items-center text-[10px] mt-1">
+                      <span className="text-stone-500">
+                        Remaining Capacity: <strong className="text-emerald-700">{currentEventRemainingTarget.toLocaleString()}</strong>
+                      </span>
+                      {selectedEvent && parseInt(segmentTarget || '0', 10) > currentEventRemainingTarget && (
+                        <span className="text-red-600 font-bold">Exceeds event quantity!</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Description (Optional) */}
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1.5">
+                    Segment Description / Targeting Notes
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={segmentDescription}
+                    onChange={(e) => setSegmentDescription(e.target.value)}
+                    placeholder="Enter any specific cohort targeting criteria, demographic filters, or special notes..."
+                    className="w-full px-3.5 py-2.5 bg-white border border-[#D8CBB9] rounded-xl text-xs text-stone-900 placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-[#8B9A6E]"
+                  />
+                </div>
+
+                {/* Submit Button */}
+                <div className="flex justify-end pt-2">
+                  <button
+                    type="submit"
+                    disabled={isSegmentSubmitting || !selectedEvent || currentEventRemainingTarget <= 0}
+                    className={`inline-flex items-center space-x-2 px-6 py-3 rounded-2xl text-xs font-bold text-white transition shadow-md ${
+                      isSegmentSubmitting || !selectedEvent || currentEventRemainingTarget <= 0
+                        ? 'bg-stone-400 cursor-not-allowed opacity-70'
+                        : 'bg-[#5A6644] hover:bg-[#495436] shadow-[#5A6644]/20'
+                    }`}
+                  >
+                    {isSegmentSubmitting ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        <span>Saving Segment to Database...</span>
+                      </>
+                    ) : (
+                      <>
+                        <PlusCircle className="w-4 h-4" />
+                        <span>Create Segment ({spokenKeyPreview})</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+            </div>
+
+            {/* Segments Directory Table */}
+            <div className="bg-[#EAE2D6] border border-[#D8CBB9] rounded-3xl p-6 sm:p-8 shadow-sm space-y-5">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-4 border-b border-[#D8CBB9]/80">
+                <div>
+                  <h3 className="text-lg font-bold text-[#2E3523] flex items-center space-x-2">
+                    <Layers className="w-5 h-5 text-[#5A6644]" />
+                    <span>Segment Directory</span>
+                  </h3>
+                  <p className="text-xs text-stone-600 mt-0.5">
+                    {selectedEvent 
+                      ? `Viewing segments for event ${selectedEvent.eventId} (${currentEventSegments.length} segments, ${currentEventAllocatedTarget.toLocaleString()}/${currentEventCapacity.toLocaleString()} target allocated)`
+                      : 'All segments stored in PostgreSQL database across events.'}
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2.5 w-full sm:w-auto">
+                  {selectedEvent && (
+                    <div className="flex rounded-xl bg-white border border-[#D8CBB9] p-0.5 text-xs font-bold">
+                      <button
+                        type="button"
+                        onClick={() => { setSegmentViewFilter('CURRENT'); loadSegments(selectedEvent.id); }}
+                        className={`px-3 py-1.5 rounded-lg transition ${
+                          segmentViewFilter === 'CURRENT' ? 'bg-[#5A6644] text-white shadow-sm' : 'text-stone-600 hover:text-stone-900'
+                        }`}
+                      >
+                        This Event Only
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setSegmentViewFilter('ALL'); loadSegments(''); }}
+                        className={`px-3 py-1.5 rounded-lg transition ${
+                          segmentViewFilter === 'ALL' ? 'bg-[#5A6644] text-white shadow-sm' : 'text-stone-600 hover:text-stone-900'
+                        }`}
+                      >
+                        All Events
+                      </button>
+                    </div>
+                  )}
+
+                  <div className="relative flex-1 sm:w-64">
+                    <Search className="w-3.5 h-3.5 text-stone-400 absolute left-3 top-3" />
+                    <input
+                      type="text"
+                      placeholder="Search spoken key, bank, state..."
+                      value={segmentSearchTerm}
+                      onChange={(e) => setSegmentSearchTerm(e.target.value)}
+                      className="w-full pl-9 pr-3 py-2 bg-white border border-[#D8CBB9] rounded-xl text-xs text-stone-900 placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-[#8B9A6E]"
+                    />
+                  </div>
+
+                  <button
+                    onClick={() => { loadSegments(); loadCustomerStats(); }}
+                    disabled={isSegmentsLoading}
+                    title="Refresh Segments"
+                    className="p-2 bg-white border border-[#D8CBB9] rounded-xl text-stone-600 hover:text-[#5A6644] hover:bg-stone-50 transition"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${isSegmentsLoading ? 'animate-spin' : ''}`} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Table */}
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="border-b border-[#D8CBB9] text-[11px] font-bold uppercase tracking-wider text-stone-600">
+                      <th className="py-3 px-4">Spoken Key</th>
+                      <th className="py-3 px-4">Insurance Status</th>
+                      <th className="py-3 px-4">Bank / Client</th>
+                      <th className="py-3 px-4">State</th>
+                      <th className="py-3 px-4">Target Audience</th>
+                      <th className="py-3 px-4">Parent Event</th>
+                      <th className="py-3 px-4">Campaign</th>
+                      <th className="py-3 px-4">Description</th>
+                      <th className="py-3 px-4">Created On</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#D8CBB9]/60 text-xs text-stone-800">
+                    {isSegmentsLoading ? (
+                      <tr>
+                        <td colSpan={9} className="py-8 text-center text-stone-500">
+                          <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-[#5A6644]" />
+                          Loading segments from PostgreSQL database...
+                        </td>
+                      </tr>
+                    ) : segments.filter(seg =>
+                        seg.spokenKey.toLowerCase().includes(segmentSearchTerm.toLowerCase()) ||
+                        (seg.clientName || '').toLowerCase().includes(segmentSearchTerm.toLowerCase()) ||
+                        (seg.state || '').toLowerCase().includes(segmentSearchTerm.toLowerCase()) ||
+                        (seg.eventCode || '').toLowerCase().includes(segmentSearchTerm.toLowerCase()) ||
+                        (seg.campaignCode || '').toLowerCase().includes(segmentSearchTerm.toLowerCase()) ||
+                        (seg.description || '').toLowerCase().includes(segmentSearchTerm.toLowerCase())
+                      ).length === 0 ? (
+                      <tr>
+                        <td colSpan={9} className="py-8 text-center text-stone-500">
+                          {segmentSearchTerm 
+                            ? 'No segments match your search.' 
+                            : selectedEvent
+                              ? `No segments registered under "${selectedEvent.eventId}" yet. Use the form above to add one!`
+                              : 'No segments registered yet. Select an event and create one above!'}
+                        </td>
+                      </tr>
+                    ) : (
+                      segments
+                        .filter(seg =>
+                          seg.spokenKey.toLowerCase().includes(segmentSearchTerm.toLowerCase()) ||
+                          (seg.clientName || '').toLowerCase().includes(segmentSearchTerm.toLowerCase()) ||
+                          (seg.state || '').toLowerCase().includes(segmentSearchTerm.toLowerCase()) ||
+                          (seg.eventCode || '').toLowerCase().includes(segmentSearchTerm.toLowerCase()) ||
+                          (seg.campaignCode || '').toLowerCase().includes(segmentSearchTerm.toLowerCase()) ||
+                          (seg.description || '').toLowerCase().includes(segmentSearchTerm.toLowerCase())
+                        )
+                        .map((seg) => (
+                          <tr key={seg.id} className="hover:bg-white/40 transition">
+                            <td className="py-3.5 px-4 font-mono font-bold text-stone-700">
+                              <span className="bg-emerald-50 text-emerald-900 border border-emerald-300 px-2.5 py-1 rounded-lg">
+                                {seg.spokenKey}
+                              </span>
+                            </td>
+                            <td className="py-3.5 px-4">
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold ${
+                                seg.insuranceStatus === 'I'
+                                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                  : 'bg-amber-100 text-amber-800 border border-amber-300'
+                              }`}>
+                                {seg.insuranceStatus === 'I' ? 'I - Insured' : 'UI - Uninsured'}
+                              </span>
+                            </td>
+                            <td className="py-3.5 px-4 font-bold text-[#2E3523]">
+                              {seg.clientName || '—'}
+                            </td>
+                            <td className="py-3.5 px-4">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-mono font-semibold bg-stone-100 text-stone-700 border border-stone-200">
+                                {seg.state || 'ALL'}
+                              </span>
+                            </td>
+                            <td className="py-3.5 px-4 font-bold text-stone-800">
+                              <span className="bg-white/80 px-2 py-0.5 rounded border border-[#D8CBB9]">
+                                {seg.target ? seg.target.toLocaleString() : '0'}
+                              </span>
+                            </td>
+                            <td className="py-3.5 px-4 font-mono text-stone-700">
+                              <span className="bg-white/80 border border-[#D8CBB9] px-2 py-0.5 rounded-md text-[11px]">
+                                {seg.eventCode || '—'}
+                              </span>
+                            </td>
+                            <td className="py-3.5 px-4 text-stone-700">
+                              {seg.campaignCode || '—'}
+                            </td>
+                            <td className="py-3.5 px-4 text-stone-500 max-w-xs truncate" title={seg.description}>
+                              {seg.description || '—'}
+                            </td>
+                            <td className="py-3.5 px-4 text-stone-500 text-[11px]">
+                              {seg.createdAt ? new Date(seg.createdAt).toLocaleDateString() : '—'}
                             </td>
                           </tr>
                         ))

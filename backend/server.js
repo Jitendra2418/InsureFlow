@@ -742,18 +742,24 @@ app.get('/api/admin/events', authenticateToken, authorizeStaff, async (req, res)
         c.campaign_id AS "campaignCode",
         c.name AS "campaignName",
         cl.name AS "clientName",
-        pr.name AS "productName"
+        pr.name AS "productName",
+        COUNT(s.id)::int AS "segmentsCount",
+        COALESCE(SUM(s.target), 0)::int AS "allocatedTarget"
       FROM campaign_events ce
       JOIN campaigns c ON ce.campaign_id = c.id
       JOIN clients cl ON c.client_id = cl.id
       JOIN products pr ON c.product_id = pr.id
+      LEFT JOIN segments s ON s.event_id = ce.id
     `;
     const params = [];
     if (campaignId) {
       query += ` WHERE ce.campaign_id = $1`;
       params.push(campaignId);
     }
-    query += ` ORDER BY ce.created_at DESC`;
+    query += `
+      GROUP BY ce.id, c.campaign_id, c.name, cl.name, pr.name
+      ORDER BY ce.created_at DESC
+    `;
 
     const result = await pool.query(query, params);
     res.json(result.rows);
@@ -865,6 +871,197 @@ app.post('/api/admin/events', authenticateToken, authorizeStaff, async (req, res
     });
   } catch (err) {
     console.error('Error creating campaign event:', err);
+    res.status(500).json({ error: 'Database error: ' + err.message });
+  }
+});
+
+// =======================================================
+// SEGMENT MANAGEMENT ENDPOINTS (INS-6)
+// =======================================================
+
+// GET /api/admin/segments/customer-stats — live counts of insured vs uninsured
+app.get('/api/admin/segments/customer-stats', authenticateToken, authorizeStaff, async (req, res) => {
+  try {
+    const statsQuery = `
+      SELECT
+        COUNT(DISTINCT u.id) FILTER (WHERE p.id IS NOT NULL)::int AS "insuredCount",
+        COUNT(DISTINCT u.id) FILTER (WHERE p.id IS NULL AND u.role = 'CUSTOMER')::int AS "uninsuredCount",
+        COUNT(DISTINCT u.id) FILTER (WHERE u.role = 'CUSTOMER')::int AS "totalCustomers"
+      FROM users u
+      LEFT JOIN policies p ON p.user_id = u.id;
+    `;
+    const result = await pool.query(statsQuery);
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Error fetching customer stats:', err);
+    res.status(500).json({ error: 'Database error: ' + err.message });
+  }
+});
+
+// GET /api/admin/segments — list segments (optional ?eventId=...)
+app.get('/api/admin/segments', authenticateToken, authorizeStaff, async (req, res) => {
+  const { eventId } = req.query;
+  try {
+    let query = `
+      SELECT
+        s.id,
+        s.event_id AS "eventId",
+        s.name,
+        s.insurance_status AS "insuranceStatus",
+        s.client_id AS "clientId",
+        cl.name AS "clientName",
+        cl.code AS "clientCode",
+        s.state,
+        s.spoken_key AS "spokenKey",
+        s.target,
+        s.description,
+        s.created_at AS "createdAt",
+        ce.event_id AS "eventCode",
+        ce.quantity AS "eventQuantity",
+        ce.channel AS "eventChannel",
+        c.campaign_id AS "campaignCode",
+        c.name AS "campaignName"
+      FROM segments s
+      JOIN campaign_events ce ON s.event_id = ce.id
+      JOIN campaigns c ON ce.campaign_id = c.id
+      LEFT JOIN clients cl ON s.client_id = cl.id
+    `;
+    const params = [];
+    if (eventId) {
+      query += ` WHERE s.event_id = $1`;
+      params.push(eventId);
+    }
+    query += ` ORDER BY s.created_at DESC`;
+
+    const result = await pool.query(query, params);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching segments:', err);
+    res.status(500).json({ error: 'Database error: ' + err.message });
+  }
+});
+
+// POST /api/admin/segments — create a new segment
+app.post('/api/admin/segments', authenticateToken, authorizeStaff, async (req, res) => {
+  const { eventId, insuranceStatus, clientId, target, description } = req.body;
+
+  if (!eventId) {
+    return res.status(400).json({ error: 'Event selection is required.' });
+  }
+  if (!insuranceStatus || !['I', 'UI'].includes(insuranceStatus)) {
+    return res.status(400).json({ error: 'Insurance status must be "I" (Insured) or "UI" (Uninsured).' });
+  }
+  if (!clientId) {
+    return res.status(400).json({ error: 'Bank (Client) selection is required.' });
+  }
+
+  const parsedTarget = parseInt(target, 10);
+  if (isNaN(parsedTarget) || parsedTarget <= 0) {
+    return res.status(400).json({ error: 'Target must be a positive number greater than 0.' });
+  }
+
+  try {
+    // 1. Fetch parent event details & quantity
+    const eventRes = await pool.query(`
+      SELECT ce.id, ce.event_id, ce.quantity, c.name as campaign_name
+      FROM campaign_events ce
+      JOIN campaigns c ON ce.campaign_id = c.id
+      WHERE ce.id = $1
+    `, [eventId]);
+
+    if (eventRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Selected event not found in database.' });
+    }
+
+    const event = eventRes.rows[0];
+    const eventQuantity = event.quantity || 0;
+
+    // 2. Fetch current allocated target sum for this event
+    const sumRes = await pool.query(`
+      SELECT COALESCE(SUM(target), 0)::int AS "allocatedTarget"
+      FROM segments
+      WHERE event_id = $1
+    `, [eventId]);
+
+    const allocatedTarget = sumRes.rows[0].allocatedTarget;
+    const remainingTarget = eventQuantity - allocatedTarget;
+
+    if (allocatedTarget + parsedTarget > eventQuantity) {
+      return res.status(400).json({
+        error: `Target (${parsedTarget}) exceeds event remaining capacity! Current event quantity is ${eventQuantity}, already allocated is ${allocatedTarget}, remaining available is ${remainingTarget}.`
+      });
+    }
+
+    // 3. Fetch client details to determine bank name and state
+    const clientRes = await pool.query('SELECT id, name, code, state FROM clients WHERE id = $1', [clientId]);
+    if (clientRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Selected bank/client not found in database.' });
+    }
+    const client = clientRes.rows[0];
+
+    // Determine state (fallback to XX if not set)
+    const clientState = (client.state && client.state.trim()) ? client.state.trim().toUpperCase() : 'ALL';
+    // Format bank identifier: uppercase, alphanumeric only
+    const bankIdentifier = (client.name || client.code || 'BANK').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+    
+    // Spoken Key format: UI-AXIS-TX or I-ICICI-MH
+    const spokenKey = `${insuranceStatus}-${bankIdentifier}-${clientState}`;
+    const segmentName = `${spokenKey} Segment`;
+
+    // 4. Insert into segments table
+    const insertQuery = `
+      INSERT INTO segments (
+        event_id,
+        name,
+        insurance_status,
+        client_id,
+        state,
+        spoken_key,
+        target,
+        target_count,
+        description
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8)
+      RETURNING
+        id,
+        event_id AS "eventId",
+        name,
+        insurance_status AS "insuranceStatus",
+        client_id AS "clientId",
+        state,
+        spoken_key AS "spokenKey",
+        target,
+        description,
+        created_at AS "createdAt"
+    `;
+
+    const insertRes = await pool.query(insertQuery, [
+      eventId,
+      segmentName,
+      insuranceStatus,
+      clientId,
+      clientState,
+      spokenKey,
+      parsedTarget,
+      description || null
+    ]);
+
+    const createdSegment = insertRes.rows[0];
+    const enriched = {
+      ...createdSegment,
+      clientName: client.name,
+      clientCode: client.code,
+      eventCode: event.event_id,
+      eventQuantity: eventQuantity,
+      campaignName: event.campaign_name
+    };
+
+    res.status(201).json({
+      message: `Segment "${spokenKey}" created successfully with target ${parsedTarget}.`,
+      segment: enriched
+    });
+  } catch (err) {
+    console.error('Error creating segment:', err);
     res.status(500).json({ error: 'Database error: ' + err.message });
   }
 });
