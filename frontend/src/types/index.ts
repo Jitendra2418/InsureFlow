@@ -60,8 +60,24 @@ export interface Policy {
 export interface Product {
   id: string;
   name: string;
-  code: 'DD' | 'HP' | 'RC';
-  description: string;
-  status: 'FLAGSHIP' | 'ACTIVE' | 'COMING_SOON';
-  premiumRatePerThousand: number;
+  code: string;
+  status: string;
+  description?: string;
+  premiumRatePerThousand?: number;
+}
+
+export interface Campaign {
+  id: string;
+  campaignId: string;
+  name: string;
+  description?: string;
+  clientId: string;
+  clientName: string;
+  productId: string;
+  productName: string;
+  productCode?: string;
+  status: 'ACTIVE' | 'INACTIVE' | 'PLANNED' | string;
+  startDate: string;
+  endDate: string;
+  createdAt: string;
 }

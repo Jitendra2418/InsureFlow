@@ -1,13 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Client } from '../types';
+import { Client, Product, Campaign } from '../types';
 import { apiRequest } from '../api';
 import { 
   Building2, Megaphone, ShieldCheck, PlusCircle, Search, RefreshCw, 
   LogOut, CheckCircle2, AlertCircle, MapPin, 
   Sparkles, Sliders, Hash, Pencil, Trash2, X, AlertTriangle,
-  Tag, Calendar, Users, ArrowRight
+  Calendar
 } from 'lucide-react';
 
 const US_STATES = [
@@ -62,12 +62,137 @@ export const AdminDashboard: React.FC = () => {
   const [deletingClient, setDeletingClient] = useState<Client | null>(null);
   const [isDeleting, setIsDeleting] = useState<boolean>(false);
 
-  // Global feedback state
+  // Global feedback state (clients tab)
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [formSuccess, setFormSuccess] = useState<string>('');
   const [formError, setFormError] = useState<string>('');
 
-  // Fetch clients from backend
+  // ── Campaign tab state ──────────────────────────────────────────
+  const [products, setProducts] = useState<Product[]>([]);
+  const [isProductsLoading, setIsProductsLoading] = useState<boolean>(false);
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [isCampaignsLoading, setIsCampaignsLoading] = useState<boolean>(false);
+
+  // Campaign form fields
+  const [campClient, setCampClient] = useState<string>('');
+  const [campProduct, setCampProduct] = useState<string>('');
+  const [campDescription, setCampDescription] = useState<string>('');
+  const [campStartMonth, setCampStartMonth] = useState<string>('');
+  const [campEndMonth, setCampEndMonth] = useState<string>('');
+  const [campStatus, setCampStatus] = useState<string>('PLANNED');
+  const [generatedCampaignId, setGeneratedCampaignId] = useState<string>('');
+
+  // Campaign form feedback
+  const [campFormSuccess, setCampFormSuccess] = useState<string>('');
+  const [campFormError, setCampFormError] = useState<string>('');
+  const [isCampSubmitting, setIsCampSubmitting] = useState<boolean>(false);
+
+  // Campaign search
+  const [campSearchTerm, setCampSearchTerm] = useState<string>('');
+
+  // Auto-generate Campaign ID when client or startMonth changes
+  const getQuarter = (monthStr: string): string => {
+    const month = parseInt(monthStr.split('-')[1], 10);
+    if (month <= 3) return 'Q1';
+    if (month <= 6) return 'Q2';
+    if (month <= 9) return 'Q3';
+    return 'Q4';
+  };
+
+  // Recompute generated campaign ID whenever client or start month changes
+  React.useEffect(() => {
+    if (!campClient || !campStartMonth) {
+      setGeneratedCampaignId('');
+      return;
+    }
+    const selectedClient = clients.find(c => c.id === campClient);
+    const clientShortName = selectedClient ? selectedClient.name.split(' ')[0] : 'CLI';
+    const year = campStartMonth.split('-')[0];
+    const quarter = getQuarter(campStartMonth);
+    setGeneratedCampaignId(`${clientShortName}-${quarter}-${year}`);
+  }, [campClient, campStartMonth, clients]);
+
+  // Load products (handles both public /products and /admin/products)
+  const loadProducts = async () => {
+    setIsProductsLoading(true);
+    try {
+      let data: Product[] = [];
+      try {
+        data = await apiRequest<Product[]>('/products');
+      } catch (err1) {
+        console.warn('GET /products failed, falling back to /admin/products...', err1);
+        data = await apiRequest<Product[]>('/admin/products');
+      }
+      if (Array.isArray(data)) {
+        setProducts(data);
+      }
+    } catch (err) {
+      console.error('Failed to load products from database:', err);
+    } finally {
+      setIsProductsLoading(false);
+    }
+  };
+
+  // Load campaigns
+  const loadCampaigns = async () => {
+    setIsCampaignsLoading(true);
+    try {
+      const data = await apiRequest<Campaign[]>('/admin/campaigns');
+      setCampaigns(data);
+    } catch (err) {
+      console.error('Failed to load campaigns:', err);
+    } finally {
+      setIsCampaignsLoading(false);
+    }
+  };
+
+  // Handle Campaign form submit
+  const handleCreateCampaign = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setCampFormError('');
+    setCampFormSuccess('');
+
+    if (!campClient) { setCampFormError('Please select a client.'); return; }
+    if (!campProduct) { setCampFormError('Please select a product.'); return; }
+    if (!campStartMonth) { setCampFormError('Please select a start month.'); return; }
+    if (!campEndMonth) { setCampFormError('Please select an end month.'); return; }
+    if (campStartMonth > campEndMonth) { setCampFormError('Start month cannot be after end month.'); return; }
+    if (!generatedCampaignId) { setCampFormError('Campaign ID could not be generated. Select a client and start month.'); return; }
+
+    setIsCampSubmitting(true);
+    try {
+      const res = await apiRequest<{ message: string; campaign: Campaign }>('/admin/campaigns', {
+        method: 'POST',
+        body: JSON.stringify({
+          clientId: campClient,
+          productId: campProduct,
+          campaignId: generatedCampaignId,
+          name: generatedCampaignId,
+          description: campDescription.trim(),
+          startMonth: campStartMonth,
+          endMonth: campEndMonth,
+          status: campStatus
+        })
+      });
+      setCampFormSuccess(res.message || `Campaign "${generatedCampaignId}" successfully created!`);
+      // Reset form
+      setCampClient('');
+      setCampProduct('');
+      setCampDescription('');
+      setCampStartMonth('');
+      setCampEndMonth('');
+      setCampStatus('PLANNED');
+      setGeneratedCampaignId('');
+      await loadCampaigns();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to create campaign.';
+      setCampFormError(msg);
+    } finally {
+      setIsCampSubmitting(false);
+    }
+  };
+
+  // ── Fetch clients from backend ──────────────────────────────────
   const loadClients = async () => {
     setIsLoading(true);
     try {
@@ -82,7 +207,18 @@ export const AdminDashboard: React.FC = () => {
 
   useEffect(() => {
     loadClients();
+    loadProducts();
+    loadCampaigns();
   }, []);
+
+  // Re-fetch products & campaigns every time the Campaign tab becomes active
+  useEffect(() => {
+    if (activeTab === 'campaigns') {
+      loadProducts();
+      loadCampaigns();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
 
   // Handle Add Client
   const handleAddClient = async (e: React.FormEvent) => {
@@ -686,108 +822,347 @@ export const AdminDashboard: React.FC = () => {
         {/* TAB 2: CAMPAIGN */}
         {activeTab === 'campaigns' && (
           <div className="space-y-6 animate-in fade-in duration-200">
-            {/* Campaign Header Card */}
+
+            {/* Campaign feedback banners */}
+            {campFormSuccess && (
+              <div className="p-4 bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm rounded-2xl flex items-center justify-between shadow-sm">
+                <div className="flex items-center space-x-2">
+                  <CheckCircle2 className="w-5 h-5 flex-shrink-0 text-emerald-600" />
+                  <span>{campFormSuccess}</span>
+                </div>
+                <button onClick={() => setCampFormSuccess('')} className="text-emerald-700 hover:text-emerald-900 p-1">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+
+            {campFormError && (
+              <div className="p-4 bg-red-50 border border-red-200 text-red-700 text-sm rounded-2xl flex items-center justify-between shadow-sm">
+                <div className="flex items-center space-x-2">
+                  <AlertCircle className="w-5 h-5 flex-shrink-0 text-red-500" />
+                  <span>{campFormError}</span>
+                </div>
+                <button onClick={() => setCampFormError('')} className="text-red-700 hover:text-red-900 p-1">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+
+            {/* Create Campaign Form */}
             <div className="bg-[#EAE2D6] rounded-3xl p-6 sm:p-8 border border-[#D8CBB9] shadow-md">
-              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 pb-6 border-b border-[#D8CBB9]/80">
-                <div>
-                  <div className="flex items-center space-x-2 text-[#5A6644] text-xs font-bold uppercase tracking-wider mb-1">
-                    <Megaphone className="w-4 h-4" />
-                    <span>Marketing & Promo Operations</span>
+              <div className="flex items-center space-x-2 text-[#5A6644] text-xs font-bold uppercase tracking-wider mb-1">
+                <Megaphone className="w-4 h-4" />
+                <span>New Campaign</span>
+              </div>
+              <h2 className="text-2xl font-bold text-[#2E3523]">Create Campaign</h2>
+              <p className="text-xs text-stone-600 mt-0.5 mb-6">
+                Fill out the details below to register a marketing campaign linked to a partner client and product.
+              </p>
+
+              <form onSubmit={handleCreateCampaign} className="space-y-5">
+                {/* Row 1: Client + Product */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                  {/* Client Dropdown */}
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1.5">
+                      Client <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      required
+                      value={campClient}
+                      onChange={(e) => setCampClient(e.target.value)}
+                      className="block w-full px-3 py-2.5 bg-white border border-[#D8CBB9] rounded-xl text-stone-900 focus:outline-none focus:ring-2 focus:ring-[#8B9A6E] text-sm font-medium"
+                    >
+                      <option value="">— Select Partner Client —</option>
+                      {clients.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name} ({c.clientId})
+                        </option>
+                      ))}
+                    </select>
                   </div>
-                  <h2 className="text-2xl font-bold text-[#2E3523]">Campaign Management</h2>
-                  <p className="text-xs text-stone-600 mt-1 max-w-2xl">
-                    Configure bank partner marketing campaigns, events, digital and direct mail drops, promo redemption codes, and audience segments.
+
+                  {/* Product Dropdown */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="block text-xs font-bold uppercase tracking-wider text-stone-700">
+                        Product <span className="text-red-500">*</span>
+                      </label>
+                      <button
+                        type="button"
+                        onClick={loadProducts}
+                        disabled={isProductsLoading}
+                        title="Reload products from database"
+                        className="text-[11px] font-bold text-[#5A6644] hover:underline flex items-center space-x-1"
+                      >
+                        <RefreshCw className={`w-3 h-3 ${isProductsLoading ? 'animate-spin' : ''}`} />
+                        <span>{isProductsLoading ? 'Fetching...' : 'Reload'}</span>
+                      </button>
+                    </div>
+                    <select
+                      required
+                      value={campProduct}
+                      onChange={(e) => setCampProduct(e.target.value)}
+                      onClick={() => {
+                        if (products.length === 0) {
+                          loadProducts();
+                        }
+                      }}
+                      onFocus={() => {
+                        if (products.length === 0) {
+                          loadProducts();
+                        }
+                      }}
+                      onMouseDown={() => {
+                        if (products.length === 0) {
+                          loadProducts();
+                        }
+                      }}
+                      className="block w-full px-3 py-2.5 bg-white border border-[#D8CBB9] rounded-xl text-stone-900 focus:outline-none focus:ring-2 focus:ring-[#8B9A6E] text-sm font-medium"
+                    >
+                      <option value="">
+                        {isProductsLoading
+                          ? 'Loading products from database...'
+                          : products.length === 0
+                            ? '— Click to load products —'
+                            : '— Select Product —'}
+                      </option>
+                      {products.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name} [{p.code}] {p.status ? `• ${p.status}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Row 2: Start Month + End Month */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1.5">
+                      Start Month <span className="text-red-500">*</span>
+                    </label>
+                    <div className="relative rounded-xl shadow-sm">
+                      <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-stone-400">
+                        <Calendar className="h-4 w-4" />
+                      </div>
+                      <input
+                        type="month"
+                        required
+                        value={campStartMonth}
+                        onChange={(e) => setCampStartMonth(e.target.value)}
+                        className="block w-full pl-10 pr-3 py-2.5 bg-white border border-[#D8CBB9] rounded-xl text-stone-900 focus:outline-none focus:ring-2 focus:ring-[#8B9A6E] text-sm"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1.5">
+                      End Month <span className="text-red-500">*</span>
+                    </label>
+                    <div className="relative rounded-xl shadow-sm">
+                      <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-stone-400">
+                        <Calendar className="h-4 w-4" />
+                      </div>
+                      <input
+                        type="month"
+                        required
+                        value={campEndMonth}
+                        min={campStartMonth || undefined}
+                        onChange={(e) => setCampEndMonth(e.target.value)}
+                        className="block w-full pl-10 pr-3 py-2.5 bg-white border border-[#D8CBB9] rounded-xl text-stone-900 focus:outline-none focus:ring-2 focus:ring-[#8B9A6E] text-sm"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Row 3: Campaign ID (auto) + Status */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                  {/* Auto-generated Campaign ID */}
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1.5">
+                      Campaign ID <span className="text-stone-400 font-normal lowercase">(auto-generated)</span>
+                    </label>
+                    <div className="relative rounded-xl shadow-sm">
+                      <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-stone-400">
+                        <Hash className="h-4 w-4" />
+                      </div>
+                      <input
+                        type="text"
+                        readOnly
+                        value={generatedCampaignId || '— select client & start month —'}
+                        className="block w-full pl-10 pr-3 py-2.5 bg-stone-100 border border-[#D8CBB9] rounded-xl text-stone-700 font-mono text-sm cursor-not-allowed font-semibold"
+                      />
+                    </div>
+                    {generatedCampaignId && (
+                      <p className="text-[11px] text-[#5A6644] mt-1 font-medium">
+                        Format: {'{Client}-Q{Quarter}-{Year}'}
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Status */}
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1.5">
+                      Status
+                    </label>
+                    <select
+                      value={campStatus}
+                      onChange={(e) => setCampStatus(e.target.value)}
+                      className="block w-full px-3 py-2.5 bg-white border border-[#D8CBB9] rounded-xl text-stone-900 focus:outline-none focus:ring-2 focus:ring-[#8B9A6E] text-sm font-medium"
+                    >
+                      <option value="PLANNED">PLANNED</option>
+                      <option value="ACTIVE">ACTIVE</option>
+                      <option value="INACTIVE">INACTIVE</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Description */}
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1.5">
+                    Description
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={campDescription}
+                    onChange={(e) => setCampDescription(e.target.value)}
+                    placeholder="Optional — brief notes about this campaign's goals, audience, or scope."
+                    className="block w-full px-3 py-2.5 bg-white border border-[#D8CBB9] rounded-xl text-stone-900 placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-[#8B9A6E] text-sm resize-none"
+                  />
+                </div>
+
+                {/* Submit */}
+                <div className="pt-2 flex justify-end">
+                  <button
+                    type="submit"
+                    disabled={isCampSubmitting}
+                    className="w-full sm:w-auto inline-flex justify-center items-center space-x-2 py-3 px-6 border border-transparent rounded-xl shadow-md text-sm font-bold text-white bg-[#5A6644] hover:bg-[#495436] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#5A6644] transition hover:scale-[1.01] active:scale-[0.99] disabled:opacity-50"
+                  >
+                    <Megaphone className="w-4 h-4" />
+                    <span>{isCampSubmitting ? 'Creating Campaign...' : 'Create Campaign'}</span>
+                  </button>
+                </div>
+              </form>
+            </div>
+
+            {/* Campaign Directory Table */}
+            <div className="bg-[#EAE2D6] rounded-3xl p-6 sm:p-8 border border-[#D8CBB9] shadow-md">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
+                <div>
+                  <h3 className="text-xl font-bold text-[#2E3523]">Campaign Directory</h3>
+                  <p className="text-xs text-stone-600 mt-0.5">
+                    All marketing campaigns stored in PostgreSQL — linked to partner clients and products.
                   </p>
                 </div>
 
-                <div className="inline-flex items-center space-x-2 bg-white/80 border border-[#D8CBB9] px-3.5 py-2 rounded-2xl text-xs font-bold text-[#5A6644] shadow-sm">
-                  <Sparkles className="w-4 h-4 text-[#8B9A6E]" />
-                  <span>Ready for Next Features</span>
+                <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
+                  <div className="relative flex-1 sm:w-60">
+                    <Search className="absolute left-3 top-2.5 h-4 w-4 text-stone-400" />
+                    <input
+                      type="text"
+                      placeholder="Search campaigns..."
+                      value={campSearchTerm}
+                      onChange={(e) => setCampSearchTerm(e.target.value)}
+                      className="w-full pl-9 pr-3 py-2 bg-white border border-[#D8CBB9] rounded-xl text-xs text-stone-900 placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-[#8B9A6E]"
+                    />
+                  </div>
+                  <button
+                    onClick={loadCampaigns}
+                    disabled={isCampaignsLoading}
+                    title="Refresh Campaigns"
+                    className="p-2 bg-white border border-[#D8CBB9] rounded-xl text-stone-600 hover:text-[#5A6644] hover:bg-stone-50 transition"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${isCampaignsLoading ? 'animate-spin' : ''}`} />
+                  </button>
                 </div>
               </div>
 
-              {/* Campaign Highlights Grid */}
-              <div className="mt-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                <div className="bg-white/80 p-5 rounded-2xl border border-[#D8CBB9]/80 shadow-sm flex flex-col justify-between">
-                  <div>
-                    <div className="w-9 h-9 rounded-xl bg-[#5A6644]/15 text-[#5A6644] flex items-center justify-center mb-3">
-                      <Megaphone className="w-5 h-5" />
-                    </div>
-                    <h4 className="font-bold text-sm text-[#2E3523]">Partner Campaigns</h4>
-                    <p className="text-[11px] text-stone-500 mt-1">
-                      Link active bank clients to AD&D Flagship and upcoming plans.
-                    </p>
-                  </div>
-                  <div className="mt-4 pt-3 border-t border-[#D8CBB9]/40 text-[11px] font-semibold text-emerald-700">
-                    ● Ready to Configure
-                  </div>
-                </div>
-
-                <div className="bg-white/80 p-5 rounded-2xl border border-[#D8CBB9]/80 shadow-sm flex flex-col justify-between">
-                  <div>
-                    <div className="w-9 h-9 rounded-xl bg-[#5A6644]/15 text-[#5A6644] flex items-center justify-center mb-3">
-                      <Tag className="w-5 h-5" />
-                    </div>
-                    <h4 className="font-bold text-sm text-[#2E3523]">Promo Codes</h4>
-                    <p className="text-[11px] text-stone-500 mt-1">
-                      Generate, validate, and track promo redemption codes.
-                    </p>
-                  </div>
-                  <div className="mt-4 pt-3 border-t border-[#D8CBB9]/40 text-[11px] font-semibold text-emerald-700">
-                    ● Ready to Configure
-                  </div>
-                </div>
-
-                <div className="bg-white/80 p-5 rounded-2xl border border-[#D8CBB9]/80 shadow-sm flex flex-col justify-between">
-                  <div>
-                    <div className="w-9 h-9 rounded-xl bg-[#5A6644]/15 text-[#5A6644] flex items-center justify-center mb-3">
-                      <Calendar className="w-5 h-5" />
-                    </div>
-                    <h4 className="font-bold text-sm text-[#2E3523]">Events & Drops</h4>
-                    <p className="text-[11px] text-stone-500 mt-1">
-                      Direct mail runs, digital campaigns, and delivery dates.
-                    </p>
-                  </div>
-                  <div className="mt-4 pt-3 border-t border-[#D8CBB9]/40 text-[11px] font-semibold text-emerald-700">
-                    ● Ready to Configure
-                  </div>
-                </div>
-
-                <div className="bg-white/80 p-5 rounded-2xl border border-[#D8CBB9]/80 shadow-sm flex flex-col justify-between">
-                  <div>
-                    <div className="w-9 h-9 rounded-xl bg-[#5A6644]/15 text-[#5A6644] flex items-center justify-center mb-3">
-                      <Users className="w-5 h-5" />
-                    </div>
-                    <h4 className="font-bold text-sm text-[#2E3523]">Audience Segments</h4>
-                    <p className="text-[11px] text-stone-500 mt-1">
-                      Target counts, demographic filters, and client segments.
-                    </p>
-                  </div>
-                  <div className="mt-4 pt-3 border-t border-[#D8CBB9]/40 text-[11px] font-semibold text-emerald-700">
-                    ● Ready to Configure
-                  </div>
-                </div>
-              </div>
-
-              {/* Ready banner */}
-              <div className="mt-6 p-5 bg-[#F7F2EB] rounded-2xl border border-[#D8CBB9] flex flex-col sm:flex-row items-center justify-between gap-4">
-                <div className="flex items-center space-x-3 text-xs text-stone-700">
-                  <div className="w-8 h-8 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold">
-                    ✓
-                  </div>
-                  <div>
-                    <p className="font-bold text-stone-900">Campaign module tab workspace is ready!</p>
-                    <p className="text-stone-500 text-[11px]">You can now specify campaign creation forms, code generators, and tracking tables.</p>
-                  </div>
-                </div>
-
-                <button
-                  onClick={() => setActiveTab('clients')}
-                  className="px-4 py-2 bg-white hover:bg-stone-50 border border-[#D8CBB9] rounded-xl text-xs font-bold text-[#5A6644] transition shadow-sm inline-flex items-center space-x-1"
-                >
-                  <span>Back to Clients Directory</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
-                </button>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="border-b border-[#D8CBB9] text-[11px] font-bold uppercase tracking-wider text-stone-600">
+                      <th className="py-3 px-4">Campaign ID</th>
+                      <th className="py-3 px-4">Client</th>
+                      <th className="py-3 px-4">Product</th>
+                      <th className="py-3 px-4">Status</th>
+                      <th className="py-3 px-4">Start Month</th>
+                      <th className="py-3 px-4">End Month</th>
+                      <th className="py-3 px-4">Description</th>
+                      <th className="py-3 px-4">Created On</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#D8CBB9]/60 text-xs text-stone-800">
+                    {isCampaignsLoading ? (
+                      <tr>
+                        <td colSpan={8} className="py-8 text-center text-stone-500">
+                          <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-[#5A6644]" />
+                          Loading campaigns from PostgreSQL database...
+                        </td>
+                      </tr>
+                    ) : campaigns.filter(c =>
+                        c.campaignId.toLowerCase().includes(campSearchTerm.toLowerCase()) ||
+                        c.clientName.toLowerCase().includes(campSearchTerm.toLowerCase()) ||
+                        c.productName.toLowerCase().includes(campSearchTerm.toLowerCase()) ||
+                        (c.description || '').toLowerCase().includes(campSearchTerm.toLowerCase())
+                      ).length === 0 ? (
+                      <tr>
+                        <td colSpan={8} className="py-8 text-center text-stone-500">
+                          {campSearchTerm ? 'No campaigns match your search.' : 'No campaigns yet. Create one above!'}
+                        </td>
+                      </tr>
+                    ) : (
+                      campaigns
+                        .filter(c =>
+                          c.campaignId.toLowerCase().includes(campSearchTerm.toLowerCase()) ||
+                          c.clientName.toLowerCase().includes(campSearchTerm.toLowerCase()) ||
+                          c.productName.toLowerCase().includes(campSearchTerm.toLowerCase()) ||
+                          (c.description || '').toLowerCase().includes(campSearchTerm.toLowerCase())
+                        )
+                        .map((camp) => {
+                          const statusColors: Record<string, string> = {
+                            ACTIVE: 'bg-emerald-100 text-emerald-800 border border-emerald-300',
+                            INACTIVE: 'bg-stone-200 text-stone-700 border border-stone-300',
+                            PLANNED: 'bg-blue-100 text-blue-800 border border-blue-300',
+                          };
+                          const statusClass = statusColors[camp.status] || 'bg-stone-100 text-stone-600 border border-stone-200';
+                          const fmtMonth = (d: string) => {
+                            if (!d) return '—';
+                            const dt = new Date(d);
+                            return dt.toLocaleDateString('en-US', { year: 'numeric', month: 'short' });
+                          };
+                          return (
+                            <tr key={camp.id} className="hover:bg-white/40 transition">
+                              <td className="py-3.5 px-4 font-mono font-bold text-stone-700">
+                                <span className="bg-white/80 border border-[#D8CBB9] px-2 py-0.5 rounded-md">
+                                  {camp.campaignId}
+                                </span>
+                              </td>
+                              <td className="py-3.5 px-4 font-bold text-[#2E3523]">{camp.clientName}</td>
+                              <td className="py-3.5 px-4">
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-[#8B9A6E]/15 text-[#3D472E]">
+                                  {camp.productName}
+                                </span>
+                              </td>
+                              <td className="py-3.5 px-4">
+                                <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold ${statusClass}`}>
+                                  {camp.status}
+                                </span>
+                              </td>
+                              <td className="py-3.5 px-4 text-stone-600">{fmtMonth(camp.startDate)}</td>
+                              <td className="py-3.5 px-4 text-stone-600">{fmtMonth(camp.endDate)}</td>
+                              <td className="py-3.5 px-4 text-stone-500 max-w-xs truncate" title={camp.description}>
+                                {camp.description || '—'}
+                              </td>
+                              <td className="py-3.5 px-4 text-stone-500 text-[11px]">
+                                {camp.createdAt ? new Date(camp.createdAt).toLocaleDateString() : '—'}
+                              </td>
+                            </tr>
+                          );
+                        })
+                    )}
+                  </tbody>
+                </table>
               </div>
             </div>
           </div>

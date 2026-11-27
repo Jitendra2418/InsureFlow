@@ -9,12 +9,18 @@ const app = express();
 const PORT = process.env.PORT || 8080;
 const JWT_SECRET = process.env.JWT_SECRET || 'insureflow-super-secret-key-change-in-production-2026';
 
-// CORS configuration for React frontend
+// CORS configuration for React frontend (allow localhost, 127.0.0.1, and any local dev origin)
 app.use(cors({
-  origin: ['http://localhost:5173', 'http://127.0.0.1:5173'],
+  origin: true,
   credentials: true
 }));
 app.use(express.json());
+
+// Request logging for debugging
+app.use((req, res, next) => {
+  console.log(`[${new Date().toLocaleTimeString()}] ${req.method} ${req.url}`);
+  next();
+});
 
 // PostgreSQL Pool Connection
 const dbPort = parseInt(process.env.DB_PORT || '5432', 10);
@@ -568,6 +574,144 @@ app.delete('/api/admin/clients/:id', authenticateToken, authorizeStaff, async (r
     });
   } catch (err) {
     console.error('Error deleting client:', err);
+    res.status(500).json({ error: 'Database error: ' + err.message });
+  }
+});
+
+// ==========================================
+// PRODUCTS API
+// ==========================================
+
+// Helper to fetch all products from PostgreSQL
+async function getProductsFromDb(res) {
+  try {
+    const result = await pool.query(
+      'SELECT id, name, code, status, description, premium_rate_per_thousand FROM products ORDER BY name ASC'
+    );
+    res.json(result.rows.map(row => ({
+      id: row.id,
+      name: row.name,
+      code: row.code,
+      status: row.status,
+      description: row.description || '',
+      premiumRatePerThousand: parseFloat(row.premium_rate_per_thousand || 0)
+    })));
+  } catch (err) {
+    console.error('Error fetching products:', err);
+    res.status(500).json({ error: 'Database error: ' + err.message });
+  }
+}
+
+// GET /api/products — list all products (public)
+app.get('/api/products', async (req, res) => {
+  await getProductsFromDb(res);
+});
+
+// GET /api/admin/products — list all products (admin/staff)
+app.get('/api/admin/products', async (req, res) => {
+  await getProductsFromDb(res);
+});
+
+// ==========================================
+// ADMIN CAMPAIGN MANAGEMENT
+// ==========================================
+
+// GET /api/admin/campaigns — list all campaigns with client & product names
+app.get('/api/admin/campaigns', authenticateToken, authorizeStaff, async (req, res) => {
+  try {
+    const query = `
+      SELECT
+        c.id,
+        c.campaign_id AS "campaignId",
+        c.name,
+        c.description,
+        c.status,
+        c.start_date AS "startDate",
+        c.end_date AS "endDate",
+        c.created_at AS "createdAt",
+        c.client_id AS "clientId",
+        cl.name AS "clientName",
+        c.product_id AS "productId",
+        pr.name AS "productName",
+        pr.code AS "productCode"
+      FROM campaigns c
+      JOIN clients cl ON c.client_id = cl.id
+      JOIN products pr ON c.product_id = pr.id
+      ORDER BY c.created_at DESC
+    `;
+    const result = await pool.query(query);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching campaigns:', err);
+    res.status(500).json({ error: 'Database error: ' + err.message });
+  }
+});
+
+// POST /api/admin/campaigns — create a new campaign
+app.post('/api/admin/campaigns', authenticateToken, authorizeStaff, async (req, res) => {
+  const { clientId, productId, campaignId, name, description, startMonth, endMonth, status } = req.body;
+
+  if (!clientId || !productId || !campaignId || !startMonth || !endMonth) {
+    return res.status(400).json({ error: 'Client, Product, Campaign ID, Start Month, and End Month are required.' });
+  }
+
+  // Convert YYYY-MM to YYYY-MM-01 date strings
+  const startDate = `${startMonth}-01`;
+  const endDate = `${endMonth}-01`;
+
+  if (new Date(startDate) > new Date(endDate)) {
+    return res.status(400).json({ error: 'Start month cannot be after End month.' });
+  }
+
+  const selectedStatus = status || 'PLANNED';
+  const campaignName = name || campaignId;
+
+  // Handle potential duplicate campaign_id by appending a suffix
+  let finalCampaignId = campaignId;
+  let suffix = 2;
+  while (suffix <= 99) {
+    const existing = await pool.query(
+      'SELECT id FROM campaigns WHERE campaign_id = $1',
+      [finalCampaignId]
+    );
+    if (existing.rows.length === 0) break;
+    finalCampaignId = `${campaignId}-${suffix}`;
+    suffix++;
+  }
+
+  try {
+    const insertQuery = `
+      INSERT INTO campaigns (client_id, product_id, campaign_id, name, description, status, start_date, end_date)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      RETURNING
+        id,
+        campaign_id AS "campaignId",
+        name,
+        description,
+        status,
+        start_date AS "startDate",
+        end_date AS "endDate",
+        created_at AS "createdAt",
+        client_id AS "clientId",
+        product_id AS "productId"
+    `;
+    const result = await pool.query(insertQuery, [
+      clientId,
+      productId,
+      finalCampaignId,
+      campaignName,
+      description || null,
+      selectedStatus,
+      startDate,
+      endDate
+    ]);
+
+    res.status(201).json({
+      message: `Campaign "${finalCampaignId}" successfully created.`,
+      campaign: result.rows[0]
+    });
+  } catch (err) {
+    console.error('Error creating campaign:', err);
     res.status(500).json({ error: 'Database error: ' + err.message });
   }
 });
