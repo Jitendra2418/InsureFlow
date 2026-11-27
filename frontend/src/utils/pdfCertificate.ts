@@ -193,9 +193,9 @@ export function generateInsuranceCertificate(policy: Policy, user: User | null):
   doc.setTextColor(darkOlive[0], darkOlive[1], darkOlive[2]);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(7.5);
-  doc.text('BENEFICIARY NAME', 20, y + 4);
-  doc.text('RELATIONSHIP', 85, y + 4);
-  doc.text('ALLOCATION SHARE', 145, y + 4);
+  doc.text('BENEFICIARY NAME & CUSTODIAN', 20, y + 4);
+  doc.text('RELATIONSHIP / DESIGNATION', 95, y + 4);
+  doc.text('ALLOCATION SHARE', 150, y + 4);
 
   y += 7;
   doc.setFont('helvetica', 'normal');
@@ -203,15 +203,19 @@ export function generateInsuranceCertificate(policy: Policy, user: User | null):
 
   if (policy.beneficiaries && policy.beneficiaries.length > 0) {
     policy.beneficiaries.forEach((b) => {
-      doc.text(`${b.firstName} ${b.lastName}`, 20, y);
-      doc.text(b.relationship || 'Spouse', 85, y);
-      doc.text(`${b.percentage}%`, 145, y);
+      const nameStr = b.guardianName
+        ? `${b.firstName} ${b.lastName} (Guardian: ${b.guardianName})`
+        : `${b.firstName} ${b.lastName}`;
+      const relStr = `${b.relationship || 'Spouse'} • ${b.isPrimary !== false ? 'Primary' : 'Contingent'}`;
+      doc.text(nameStr.substring(0, 38), 20, y);
+      doc.text(relStr.substring(0, 30), 95, y);
+      doc.text(`${Number(b.percentage).toFixed(2)}%`, 150, y);
       y += 5.5;
     });
   } else {
     doc.text('Standard Estate / Legal Heirs as per Law', 20, y);
-    doc.text('Estate', 85, y);
-    doc.text('100%', 145, y);
+    doc.text('Estate • Primary', 95, y);
+    doc.text('100.00%', 150, y);
     y += 5.5;
   }
 

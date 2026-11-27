@@ -125,6 +125,8 @@ CREATE TABLE IF NOT EXISTS beneficiaries (
   relationship VARCHAR(50),
   percentage   NUMERIC(5,2) NOT NULL CHECK (percentage > 0 AND percentage <= 100),
   phone        VARCHAR(30),
+  is_primary   BOOLEAN NOT NULL DEFAULT TRUE,
+  guardian_name VARCHAR(100),
   is_active    BOOLEAN NOT NULL DEFAULT TRUE,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

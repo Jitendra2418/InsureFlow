@@ -2,9 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { Policy, Beneficiary } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { CoverageCalculator } from './CoverageCalculator';
+import { BeneficiaryManager } from './BeneficiaryManager';
 import { 
   X, ShieldCheck, DollarSign, Building2, HeartHandshake, 
-  UserPlus, Trash2, AlertCircle, Save 
+  AlertCircle, Save 
 } from 'lucide-react';
 
 interface EditPolicyModalProps {
@@ -52,8 +53,12 @@ export const EditPolicyModal: React.FC<EditPolicyModalProps> = ({
       setZipCode(policy.zipCode || '');
       setBeneficiaries(
         policy.beneficiaries && policy.beneficiaries.length > 0
-          ? policy.beneficiaries.map(b => ({ ...b }))
-          : [{ firstName: '', lastName: '', relationship: 'Spouse', percentage: 100, phone: '' }]
+          ? policy.beneficiaries.map(b => ({
+              ...b,
+              isPrimary: b.isPrimary !== false,
+              guardianName: b.guardianName || ''
+            }))
+          : [{ firstName: '', lastName: '', relationship: 'Spouse', percentage: 100, phone: '', isPrimary: true, guardianName: '' }]
       );
       setError('');
     }
@@ -63,26 +68,8 @@ export const EditPolicyModal: React.FC<EditPolicyModalProps> = ({
 
   // Monthly Premium Formula: (cover_amount / 1000) * 0.60
   const monthlyPremium = (coverAmount / 1000) * 0.60;
-  const totalPercentage = beneficiaries.reduce((sum, b) => sum + (Number(b.percentage) || 0), 0);
-
-  // Beneficiary Management
-  const handleAddBeneficiary = () => {
-    setBeneficiaries([
-      ...beneficiaries,
-      { firstName: '', lastName: '', relationship: 'Child', percentage: 0, phone: '' }
-    ]);
-  };
-
-  const handleRemoveBeneficiary = (index: number) => {
-    if (beneficiaries.length <= 1) return;
-    setBeneficiaries(beneficiaries.filter((_, i) => i !== index));
-  };
-
-  const handleBeneficiaryChange = (index: number, field: keyof Beneficiary, value: string | number) => {
-    const updated = [...beneficiaries];
-    updated[index] = { ...updated[index], [field]: value };
-    setBeneficiaries(updated);
-  };
+  const primaryBens = beneficiaries.filter(b => b.isPrimary !== false);
+  const primaryTotal = primaryBens.reduce((sum, b) => sum + (Number(b.percentage) || 0), 0);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -95,16 +82,41 @@ export const EditPolicyModal: React.FC<EditPolicyModalProps> = ({
       return;
     }
 
-    if (Math.abs(totalPercentage - 100) > 0.01) {
+    const primary = beneficiaries.filter(b => b.isPrimary !== false);
+    const contingent = beneficiaries.filter(b => b.isPrimary === false);
+
+    if (primary.length === 0) {
       setActiveTab('beneficiaries');
-      setError(`Beneficiary allocation must equal 100%. Current total: ${totalPercentage}%`);
+      setError('At least one Primary beneficiary must be designated.');
       return;
+    }
+
+    const pTotal = primary.reduce((sum, b) => sum + (Number(b.percentage) || 0), 0);
+    if (Math.abs(pTotal - 100) > 0.01) {
+      setActiveTab('beneficiaries');
+      setError(`Primary beneficiary allocation must equal 100%. Current total: ${pTotal.toFixed(1)}%`);
+      return;
+    }
+
+    if (contingent.length > 0) {
+      const cTotal = contingent.reduce((sum, b) => sum + (Number(b.percentage) || 0), 0);
+      if (Math.abs(cTotal - 100) > 0.01) {
+        setActiveTab('beneficiaries');
+        setError(`Contingent beneficiary allocation must equal 100%. Current total: ${cTotal.toFixed(1)}%`);
+        return;
+      }
     }
 
     for (const b of beneficiaries) {
       if (!b.firstName.trim() || !b.lastName.trim()) {
         setActiveTab('beneficiaries');
         setError('First and last name are required for every beneficiary.');
+        return;
+      }
+      const isMinor = b.relationship === 'Child (Minor under 18)' || b.relationship === 'Child';
+      if (isMinor && (!b.guardianName || !b.guardianName.trim())) {
+        setActiveTab('beneficiaries');
+        setError(`Legal Guardian/Trustee name is required for minor beneficiary ${b.firstName} ${b.lastName}.`);
         return;
       }
     }
@@ -136,8 +148,8 @@ export const EditPolicyModal: React.FC<EditPolicyModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-900/50 backdrop-blur-sm overflow-y-auto">
-      <div className="relative w-full max-w-2xl bg-[#F7F2EB] rounded-3xl shadow-2xl border border-[#D8CBB9] overflow-hidden my-8">
+    <div className="fixed inset-0 z-50 flex items-start justify-center p-3 sm:p-6 bg-stone-900/60 backdrop-blur-sm overflow-y-auto">
+      <div className="relative w-full max-w-2xl bg-[#F7F2EB] rounded-3xl shadow-2xl border border-[#D8CBB9] overflow-hidden my-3 sm:my-6 flex flex-col max-h-[92vh]">
         
         {/* Header */}
         <div className="bg-[#EAE2D6] px-6 py-5 border-b border-[#D8CBB9] flex items-center justify-between">
@@ -211,7 +223,7 @@ export const EditPolicyModal: React.FC<EditPolicyModalProps> = ({
         )}
 
         {/* Modal Form */}
-        <form onSubmit={handleSave} className="p-6 space-y-6">
+        <form onSubmit={handleSave} className="p-6 space-y-6 overflow-y-auto flex-1">
 
           {/* TAB 1: COVER AMOUNT (INS-15 Actuarial Rating Engine) */}
           {activeTab === 'cover' && (
@@ -306,102 +318,11 @@ export const EditPolicyModal: React.FC<EditPolicyModalProps> = ({
 
           {/* TAB 3: BENEFICIARIES */}
           {activeTab === 'beneficiaries' && (
-            <div className="space-y-4 animate-fade-in">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-sm font-bold uppercase tracking-wider text-[#2E3523] flex items-center space-x-1.5">
-                    <HeartHandshake className="w-4 h-4 text-[#8B9A6E]" />
-                    <span>Beneficiary Designation</span>
-                  </h3>
-                  <p className="text-[11px] text-stone-500">
-                    Rule: Total percentage allocation must equal exactly 100%.
-                  </p>
-                </div>
-                <div className={`px-2.5 py-1 rounded-full text-xs font-bold ${
-                  totalPercentage === 100 
-                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' 
-                    : 'bg-amber-100 text-amber-800 border border-amber-300'
-                }`}>
-                  Total: {totalPercentage}%
-                </div>
-              </div>
-
-              <div className="space-y-3 max-h-72 overflow-y-auto pr-1">
-                {beneficiaries.map((b, index) => (
-                  <div key={index} className="p-3 bg-white rounded-xl border border-[#D8CBB9] space-y-2 shadow-sm">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-stone-700">Beneficiary #{index + 1}</span>
-                      {beneficiaries.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveBeneficiary(index)}
-                          className="text-stone-400 hover:text-red-600 transition"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                    </div>
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-                      <div>
-                        <label className="block text-stone-600 mb-0.5 font-medium">First Name</label>
-                        <input
-                          type="text"
-                          required
-                          placeholder="First name"
-                          value={b.firstName}
-                          onChange={(e) => handleBeneficiaryChange(index, 'firstName', e.target.value)}
-                          className="w-full px-2.5 py-1.5 border border-[#D8CBB9] rounded-lg focus:ring-1 focus:ring-[#8B9A6E] text-stone-900"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-stone-600 mb-0.5 font-medium">Last Name</label>
-                        <input
-                          type="text"
-                          required
-                          placeholder="Last name"
-                          value={b.lastName}
-                          onChange={(e) => handleBeneficiaryChange(index, 'lastName', e.target.value)}
-                          className="w-full px-2.5 py-1.5 border border-[#D8CBB9] rounded-lg focus:ring-1 focus:ring-[#8B9A6E] text-stone-900"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-stone-600 mb-0.5 font-medium">Relationship</label>
-                        <select
-                          value={b.relationship}
-                          onChange={(e) => handleBeneficiaryChange(index, 'relationship', e.target.value)}
-                          className="w-full px-2 py-1.5 border border-[#D8CBB9] rounded-lg focus:ring-1 focus:ring-[#8B9A6E] bg-white text-stone-900"
-                        >
-                          <option>Spouse</option>
-                          <option>Child</option>
-                          <option>Parent</option>
-                          <option>Sibling</option>
-                          <option>Trust/Estate</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-stone-600 mb-0.5 font-medium">Share (%)</label>
-                        <input
-                          type="number"
-                          min="1"
-                          max="100"
-                          value={b.percentage}
-                          onChange={(e) => handleBeneficiaryChange(index, 'percentage', Number(e.target.value))}
-                          className="w-full px-2.5 py-1.5 border border-[#D8CBB9] rounded-lg focus:ring-1 focus:ring-[#8B9A6E] text-stone-900 font-bold"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                ))}
-
-                <button
-                  type="button"
-                  onClick={handleAddBeneficiary}
-                  className="w-full py-2 text-xs font-semibold text-[#5A6644] bg-[#EAE2D6]/60 hover:bg-[#EAE2D6] rounded-xl border border-dashed border-[#D8CBB9] flex items-center justify-center space-x-1.5 transition"
-                >
-                  <UserPlus className="w-3.5 h-3.5" />
-                  <span>Add Another Beneficiary</span>
-                </button>
-              </div>
+            <div className="space-y-4 animate-fade-in max-h-96 overflow-y-auto pr-1">
+              <BeneficiaryManager
+                beneficiaries={beneficiaries}
+                onChange={setBeneficiaries}
+              />
             </div>
           )}
 
@@ -419,7 +340,7 @@ export const EditPolicyModal: React.FC<EditPolicyModalProps> = ({
             <div className="flex space-x-3">
               <button
                 type="submit"
-                disabled={isSubmitting || Math.abs(totalPercentage - 100) > 0.01}
+                disabled={isSubmitting || Math.abs(primaryTotal - 100) > 0.01}
                 className="bg-[#8B9A6E] hover:bg-[#738258] text-white px-6 py-2.5 rounded-xl text-xs font-bold transition flex items-center space-x-2 shadow-md hover:scale-[1.01] active:scale-[0.99] disabled:opacity-50"
               >
                 <Save className="w-4 h-4" />

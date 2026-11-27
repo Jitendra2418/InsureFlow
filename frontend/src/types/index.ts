@@ -33,6 +33,8 @@ export interface Beneficiary {
   relationship: string;
   percentage: number;
   phone?: string;
+  isPrimary?: boolean;
+  guardianName?: string;
 }
 
 export interface Policy {

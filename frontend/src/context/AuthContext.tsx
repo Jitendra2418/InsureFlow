@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { User, Policy } from '../types';
+import { User, Policy, Beneficiary } from '../types';
 import { apiRequest } from '../api';
 
 interface AuthContextType {
@@ -36,7 +36,7 @@ interface AuthContextType {
     city?: string;
     state?: string;
     zipCode?: string;
-    beneficiaries?: { firstName: string; lastName: string; relationship: string; percentage: number; phone?: string }[];
+    beneficiaries?: Beneficiary[];
   }) => Promise<{ success: boolean; error?: string }>;
   cancelPolicy: (policyId: string) => Promise<{ success: boolean; error?: string }>;
 }
@@ -197,7 +197,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     city?: string;
     state?: string;
     zipCode?: string;
-    beneficiaries?: { firstName: string; lastName: string; relationship: string; percentage: number; phone?: string }[];
+    beneficiaries?: Beneficiary[];
   }): Promise<{ success: boolean; error?: string }> => {
     try {
       await apiRequest(`/policies/${policyId}`, {

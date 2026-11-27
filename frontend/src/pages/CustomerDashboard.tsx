@@ -304,11 +304,21 @@ export const CustomerDashboard: React.FC = () => {
                         <Users className="w-3.5 h-3.5 text-stone-400 mt-0.5 flex-shrink-0" />
                         <div>
                           <strong>Beneficiaries: </strong>
-                          {policy.beneficiaries.map((b, i) => (
-                            <span key={i} className="inline-block mr-2 bg-[#F7F2EB] px-2 py-0.5 rounded border border-[#EAE2D6]">
-                              {b.firstName} {b.lastName} ({b.relationship} &bull; {b.percentage}%)
-                            </span>
-                          ))}
+                          <div className="inline-flex flex-wrap gap-1.5 mt-0.5">
+                            {policy.beneficiaries.map((b, i) => (
+                              <span key={i} className="inline-flex items-center space-x-1 bg-[#F7F2EB] px-2 py-0.5 rounded-lg border border-[#EAE2D6] text-[11px]">
+                                <span className={`w-1.5 h-1.5 rounded-full ${b.isPrimary !== false ? 'bg-[#8B9A6E]' : 'bg-stone-500'}`} />
+                                <span className="font-semibold text-stone-900">{b.firstName} {b.lastName}</span>
+                                <span className="text-stone-500">({b.relationship})</span>
+                                <span className="font-mono font-bold text-[#5A6644]">{b.percentage}%</span>
+                                {b.guardianName && (
+                                  <span className="text-[10px] text-amber-800 bg-amber-50 px-1 rounded border border-amber-200">
+                                    Guardian: {b.guardianName}
+                                  </span>
+                                )}
+                              </span>
+                            ))}
+                          </div>
                         </div>
                       </div>
                     </div>

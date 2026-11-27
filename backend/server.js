@@ -731,9 +731,10 @@ app.get('/api/policies', authenticateToken, async (req, res) => {
     const policies = await Promise.all(
       policiesRes.rows.map(async (row) => {
         const benQuery = `
-          SELECT id, first_name, last_name, relationship, percentage, phone
+          SELECT id, first_name, last_name, relationship, percentage, phone, is_primary, guardian_name
           FROM beneficiaries
           WHERE policy_id = $1 AND is_active = true
+          ORDER BY is_primary DESC, percentage DESC, created_at ASC
         `;
         const benRes = await pool.query(benQuery, [row.id]);
 
@@ -759,7 +760,9 @@ app.get('/api/policies', authenticateToken, async (req, res) => {
             lastName: b.last_name,
             relationship: b.relationship,
             percentage: parseFloat(b.percentage),
-            phone: b.phone
+            phone: b.phone,
+            isPrimary: b.is_primary !== false,
+            guardianName: b.guardian_name || ''
           })),
           createdAt: row.created_at
         };
@@ -810,6 +813,48 @@ app.post('/api/enrollment/validate-code', async (req, res) => {
   }
 });
 
+// Beneficiary Validation Helper (ERISA & Insurance Compliance Standards)
+function validateBeneficiaries(beneficiaries) {
+  if (!beneficiaries || !Array.isArray(beneficiaries) || beneficiaries.length === 0) {
+    return { valid: false, error: 'At least one primary beneficiary designation is required.' };
+  }
+
+  const primary = beneficiaries.filter(b => b.isPrimary !== false);
+  const contingent = beneficiaries.filter(b => b.isPrimary === false);
+
+  if (primary.length === 0) {
+    return { valid: false, error: 'At least one Primary beneficiary must be designated.' };
+  }
+
+  const primarySum = primary.reduce((sum, b) => sum + (parseFloat(b.percentage) || 0), 0);
+  if (Math.abs(primarySum - 100) > 0.01) {
+    return { valid: false, error: `Primary beneficiary allocations must sum to exactly 100%. Current total: ${primarySum.toFixed(1)}%` };
+  }
+
+  if (contingent.length > 0) {
+    const contSum = contingent.reduce((sum, b) => sum + (parseFloat(b.percentage) || 0), 0);
+    if (Math.abs(contSum - 100) > 0.01) {
+      return { valid: false, error: `Contingent beneficiary allocations must sum to exactly 100%. Current total: ${contSum.toFixed(1)}%` };
+    }
+  }
+
+  for (const b of beneficiaries) {
+    if (!b.firstName || !b.firstName.trim() || !b.lastName || !b.lastName.trim()) {
+      return { valid: false, error: 'First and last name are required for every beneficiary.' };
+    }
+    const pct = parseFloat(b.percentage);
+    if (isNaN(pct) || pct <= 0 || pct > 100) {
+      return { valid: false, error: `Invalid allocation percentage for ${b.firstName} ${b.lastName}. Must be between 0.01% and 100%.` };
+    }
+    const isMinor = b.relationship === 'Child' || b.relationship === 'Child (Minor under 18)';
+    if (isMinor && (!b.guardianName || !b.guardianName.trim())) {
+      return { valid: false, error: `Legal Guardian / Trustee is required for minor beneficiary ${b.firstName} ${b.lastName}.` };
+    }
+  }
+
+  return { valid: true };
+}
+
 // 6. Enroll Customer into Policy (Inserts to PostgreSQL)
 app.post('/api/enrollment/enroll', authenticateToken, async (req, res) => {
   const {
@@ -851,13 +896,9 @@ app.post('/api/enrollment/enroll', authenticateToken, async (req, res) => {
     return res.status(400).json({ error: 'Complete mailing address is required.' });
   }
 
-  if (!beneficiaries || !Array.isArray(beneficiaries) || beneficiaries.length === 0) {
-    return res.status(400).json({ error: 'At least one beneficiary is required.' });
-  }
-
-  const totalPct = beneficiaries.reduce((sum, b) => sum + (parseFloat(b.percentage) || 0), 0);
-  if (Math.abs(totalPct - 100) > 0.01) {
-    return res.status(400).json({ error: `Beneficiary percentages must equal 100%. Current total: ${totalPct.toFixed(1)}%` });
+  const benValidation = validateBeneficiaries(beneficiaries);
+  if (!benValidation.valid) {
+    return res.status(400).json({ error: benValidation.error });
   }
 
   // Monthly Premium Formula: (cover_amount / 1000) * 0.60
@@ -928,15 +969,17 @@ app.post('/api/enrollment/enroll', authenticateToken, async (req, res) => {
     // 6. Insert Beneficiaries
     for (const b of beneficiaries) {
       await client.query(`
-        INSERT INTO beneficiaries (policy_id, first_name, last_name, relationship, percentage, phone)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        INSERT INTO beneficiaries (policy_id, first_name, last_name, relationship, percentage, phone, is_primary, guardian_name)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       `, [
         createdPolicy.id,
         b.firstName.trim(),
         b.lastName.trim(),
-        b.relationship,
+        b.relationship || 'Spouse',
         parseFloat(b.percentage),
-        b.phone || null
+        b.phone ? b.phone.trim() : null,
+        b.isPrimary !== false,
+        b.guardianName ? b.guardianName.trim() : null
       ]);
     }
 
@@ -1027,17 +1070,9 @@ app.put('/api/policies/:id', authenticateToken, async (req, res) => {
 
     // 4. Validate Beneficiaries if provided
     if (beneficiaries !== undefined) {
-      if (!Array.isArray(beneficiaries) || beneficiaries.length === 0) {
-        return res.status(400).json({ error: 'At least one beneficiary is required.' });
-      }
-      const totalPct = beneficiaries.reduce((sum, b) => sum + (parseFloat(b.percentage) || 0), 0);
-      if (Math.abs(totalPct - 100) > 0.01) {
-        return res.status(400).json({ error: `Beneficiary percentages must sum to exactly 100%. Current sum: ${totalPct.toFixed(1)}%` });
-      }
-      for (const b of beneficiaries) {
-        if (!b.firstName || !b.firstName.trim() || !b.lastName || !b.lastName.trim()) {
-          return res.status(400).json({ error: 'First and last name are required for all beneficiaries.' });
-        }
+      const benValidation = validateBeneficiaries(beneficiaries);
+      if (!benValidation.valid) {
+        return res.status(400).json({ error: benValidation.error });
       }
     }
 
@@ -1085,15 +1120,17 @@ app.put('/api/policies/:id', authenticateToken, async (req, res) => {
         await client.query('DELETE FROM beneficiaries WHERE policy_id = $1', [policyId]);
         for (const b of beneficiaries) {
           await client.query(`
-            INSERT INTO beneficiaries (policy_id, first_name, last_name, relationship, percentage, phone)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            INSERT INTO beneficiaries (policy_id, first_name, last_name, relationship, percentage, phone, is_primary, guardian_name)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
           `, [
             policyId,
             b.firstName.trim(),
             b.lastName.trim(),
             b.relationship || 'Spouse',
             parseFloat(b.percentage),
-            b.phone || null
+            b.phone ? b.phone.trim() : null,
+            b.isPrimary !== false,
+            b.guardianName ? b.guardianName.trim() : null
           ]);
         }
 
@@ -1124,6 +1161,75 @@ app.put('/api/policies/:id', authenticateToken, async (req, res) => {
     }
   } catch (err) {
     console.error('Error in policy update route:', err);
+    res.status(500).json({ error: 'Database error: ' + err.message });
+  }
+});
+
+// 7b. Dedicated Update Policy Beneficiaries Endpoint (ERISA / Insurance Compliance)
+app.put('/api/policies/:id/beneficiaries', authenticateToken, async (req, res) => {
+  const policyId = req.params.id;
+  const { beneficiaries } = req.body;
+
+  const validation = validateBeneficiaries(beneficiaries);
+  if (!validation.valid) {
+    return res.status(400).json({ error: validation.error });
+  }
+
+  try {
+    const curRes = await pool.query(
+      'SELECT id, policy_number, status FROM policies WHERE id = $1 AND user_id = $2',
+      [policyId, req.user.id]
+    );
+
+    if (curRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Policy not found or unauthorized.' });
+    }
+
+    if (curRes.rows[0].status !== 'ACTIVE') {
+      return res.status(400).json({ error: 'Only ACTIVE policies can have beneficiaries modified.' });
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM beneficiaries WHERE policy_id = $1', [policyId]);
+
+      for (const b of beneficiaries) {
+        await client.query(`
+          INSERT INTO beneficiaries (policy_id, first_name, last_name, relationship, percentage, phone, is_primary, guardian_name)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        `, [
+          policyId,
+          b.firstName.trim(),
+          b.lastName.trim(),
+          b.relationship || 'Spouse',
+          parseFloat(b.percentage),
+          b.phone ? b.phone.trim() : null,
+          b.isPrimary !== false,
+          b.guardianName ? b.guardianName.trim() : null
+        ]);
+      }
+
+      try {
+        await client.query(`
+          INSERT INTO policy_audit_logs (policy_id, changed_by_user_id, action, new_value)
+          VALUES ($1, $2, 'UPDATE_BENEFICIARIES', $3)
+        `, [policyId, req.user.id, JSON.stringify({ beneficiaries })]);
+      } catch (logErr) {
+        console.warn('Beneficiary audit log warning:', logErr.message);
+      }
+
+      await client.query('COMMIT');
+      res.json({ message: 'Beneficiaries successfully updated in database.', policyId, beneficiaries });
+    } catch (err) {
+      await client.query('ROLLBACK');
+      console.error('Error updating beneficiaries:', err);
+      res.status(500).json({ error: 'Database error: ' + err.message });
+    } finally {
+      client.release();
+    }
+  } catch (err) {
+    console.error('Error in PUT /api/policies/:id/beneficiaries:', err);
     res.status(500).json({ error: 'Database error: ' + err.message });
   }
 });

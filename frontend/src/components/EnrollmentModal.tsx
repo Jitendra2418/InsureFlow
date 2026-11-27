@@ -3,9 +3,10 @@ import { useAuth } from '../context/AuthContext';
 import { Beneficiary } from '../types';
 import { apiRequest } from '../api';
 import { CoverageCalculator } from './CoverageCalculator';
+import { BeneficiaryManager } from './BeneficiaryManager';
 import { 
   X, Check, ShieldCheck, ArrowRight, ArrowLeft, 
-  Sparkles, AlertCircle, Building2, UserPlus, Trash2, HeartHandshake
+  Sparkles, AlertCircle, Building2
 } from 'lucide-react';
 
 interface EnrollmentModalProps {
@@ -82,27 +83,6 @@ export const EnrollmentModal: React.FC<EnrollmentModalProps> = ({ isOpen, onClos
     }
   };
 
-  // Beneficiary Management
-  const handleAddBeneficiary = () => {
-    setBeneficiaries([
-      ...beneficiaries,
-      { firstName: '', lastName: '', relationship: 'Child', percentage: 0, phone: '' }
-    ]);
-  };
-
-  const handleRemoveBeneficiary = (index: number) => {
-    if (beneficiaries.length === 1) return;
-    setBeneficiaries(beneficiaries.filter((_, i) => i !== index));
-  };
-
-  const handleBeneficiaryChange = (index: number, field: keyof Beneficiary, value: string | number) => {
-    const updated = [...beneficiaries];
-    updated[index] = { ...updated[index], [field]: value };
-    setBeneficiaries(updated);
-  };
-
-  const totalPercentage = beneficiaries.reduce((sum, b) => sum + (Number(b.percentage) || 0), 0);
-
   // Step 3 Validation before Review
   const handleGoToReview = () => {
     setGeneralError('');
@@ -110,13 +90,37 @@ export const EnrollmentModal: React.FC<EnrollmentModalProps> = ({ isOpen, onClos
       setGeneralError('Please fill out all required address fields.');
       return;
     }
-    if (totalPercentage !== 100) {
-      setGeneralError(`Beneficiary percentages must sum to exactly 100%. Current total: ${totalPercentage}%`);
+
+    const primary = beneficiaries.filter(b => b.isPrimary !== false);
+    const contingent = beneficiaries.filter(b => b.isPrimary === false);
+
+    if (primary.length === 0) {
+      setGeneralError('At least one Primary beneficiary must be designated.');
       return;
     }
+
+    const primaryTotal = primary.reduce((sum, b) => sum + (Number(b.percentage) || 0), 0);
+    if (Math.abs(primaryTotal - 100) > 0.01) {
+      setGeneralError(`Primary beneficiary allocations must sum to exactly 100%. Current total: ${primaryTotal.toFixed(1)}%`);
+      return;
+    }
+
+    if (contingent.length > 0) {
+      const contingentTotal = contingent.reduce((sum, b) => sum + (Number(b.percentage) || 0), 0);
+      if (Math.abs(contingentTotal - 100) > 0.01) {
+        setGeneralError(`Contingent beneficiary allocations must sum to exactly 100%. Current total: ${contingentTotal.toFixed(1)}%`);
+        return;
+      }
+    }
+
     for (const b of beneficiaries) {
       if (!b.firstName.trim() || !b.lastName.trim()) {
-        setGeneralError('Please provide both first and last name for each beneficiary.');
+        setGeneralError('Please provide both first and last name for every beneficiary.');
+        return;
+      }
+      const isMinor = b.relationship === 'Child (Minor under 18)' || b.relationship === 'Child';
+      if (isMinor && (!b.guardianName || !b.guardianName.trim())) {
+        setGeneralError(`Legal Guardian/Trustee name is required for minor beneficiary ${b.firstName} ${b.lastName}.`);
         return;
       }
     }
@@ -156,11 +160,11 @@ export const EnrollmentModal: React.FC<EnrollmentModalProps> = ({ isOpen, onClos
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-900/50 backdrop-blur-sm overflow-y-auto">
-      <div className="relative w-full max-w-2xl bg-[#F7F2EB] rounded-2xl shadow-2xl border border-[#EAE2D6] overflow-hidden my-8">
+    <div className="fixed inset-0 z-50 flex items-start justify-center p-3 sm:p-6 bg-stone-900/60 backdrop-blur-sm overflow-y-auto">
+      <div className="relative w-full max-w-2xl bg-[#F7F2EB] rounded-2xl shadow-2xl border border-[#EAE2D6] overflow-hidden my-3 sm:my-6 flex flex-col max-h-[92vh]">
         
-        {/* Header */}
-        <div className="bg-[#EAE2D6] px-6 py-5 border-b border-[#D8CBB9] flex items-center justify-between">
+        {/* Header - Fixed Top */}
+        <div className="bg-[#EAE2D6] px-6 py-4 border-b border-[#D8CBB9] flex items-center justify-between flex-shrink-0">
           <div className="flex items-center space-x-3">
             <div className="w-10 h-10 rounded-xl bg-[#8B9A6E] flex items-center justify-center text-white shadow-sm">
               <ShieldCheck className="w-5 h-5 stroke-[2.2]" />
@@ -178,8 +182,8 @@ export const EnrollmentModal: React.FC<EnrollmentModalProps> = ({ isOpen, onClos
           </button>
         </div>
 
-        {/* Wizard Step Indicator */}
-        <div className="px-6 py-3 bg-[#EEEEEE] border-b border-[#EAE2D6]">
+        {/* Wizard Step Indicator - Fixed */}
+        <div className="px-6 py-2.5 bg-[#EEEEEE] border-b border-[#EAE2D6] flex-shrink-0">
           <div className="flex items-center justify-between text-xs font-semibold text-stone-600">
             <span className={step >= 1 ? 'text-[#5A6644] font-bold flex items-center space-x-1' : ''}>
               <span className={`w-5 h-5 rounded-full inline-flex items-center justify-center mr-1 text-[11px] ${step >= 1 ? 'bg-[#8B9A6E] text-white' : 'bg-stone-300 text-stone-700'}`}>1</span>
@@ -203,8 +207,8 @@ export const EnrollmentModal: React.FC<EnrollmentModalProps> = ({ isOpen, onClos
           </div>
         </div>
 
-        {/* Modal Body */}
-        <div className="p-6">
+        {/* Modal Body - Scrollable Content */}
+        <div className="p-6 overflow-y-auto flex-1">
           {generalError && (
             <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl flex items-center space-x-2">
               <AlertCircle className="w-4 h-4 flex-shrink-0 text-red-500" />
@@ -367,101 +371,10 @@ export const EnrollmentModal: React.FC<EnrollmentModalProps> = ({ isOpen, onClos
 
               {/* Beneficiaries Form */}
               <div className="pt-3 border-t border-[#EAE2D6]">
-                <div className="flex items-center justify-between mb-3">
-                  <div>
-                    <h3 className="text-sm font-bold uppercase tracking-wider text-[#2E3523] flex items-center space-x-1.5">
-                      <HeartHandshake className="w-4 h-4 text-[#8B9A6E]" />
-                      <span>Beneficiary Designation</span>
-                    </h3>
-                    <p className="text-[11px] text-stone-500">
-                      Rule: Percentage split must sum up to exactly 100%.
-                    </p>
-                  </div>
-                  <div className={`px-2.5 py-1 rounded-full text-xs font-bold ${
-                    totalPercentage === 100 
-                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' 
-                      : 'bg-amber-100 text-amber-800 border border-amber-300'
-                  }`}>
-                    Total: {totalPercentage}%
-                  </div>
-                </div>
-
-                <div className="space-y-3">
-                  {beneficiaries.map((b, index) => (
-                    <div key={index} className="p-3 bg-white rounded-xl border border-[#D8CBB9] space-y-2">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-stone-700">Beneficiary #{index + 1}</span>
-                        {beneficiaries.length > 1 && (
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveBeneficiary(index)}
-                            className="text-stone-400 hover:text-red-600 transition"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                      </div>
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-                        <div>
-                          <label className="block text-stone-600 mb-0.5">First Name</label>
-                          <input
-                            type="text"
-                            required
-                            placeholder="First name"
-                            value={b.firstName}
-                            onChange={(e) => handleBeneficiaryChange(index, 'firstName', e.target.value)}
-                            className="w-full px-2 py-1.5 border border-[#D8CBB9] rounded-md focus:ring-1 focus:ring-[#8B9A6E]"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-stone-600 mb-0.5">Last Name</label>
-                          <input
-                            type="text"
-                            required
-                            placeholder="Last name"
-                            value={b.lastName}
-                            onChange={(e) => handleBeneficiaryChange(index, 'lastName', e.target.value)}
-                            className="w-full px-2 py-1.5 border border-[#D8CBB9] rounded-md focus:ring-1 focus:ring-[#8B9A6E]"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-stone-600 mb-0.5">Relationship</label>
-                          <select
-                            value={b.relationship}
-                            onChange={(e) => handleBeneficiaryChange(index, 'relationship', e.target.value)}
-                            className="w-full px-2 py-1.5 border border-[#D8CBB9] rounded-md focus:ring-1 focus:ring-[#8B9A6E] bg-white"
-                          >
-                            <option>Spouse</option>
-                            <option>Child</option>
-                            <option>Parent</option>
-                            <option>Sibling</option>
-                            <option>Trust/Estate</option>
-                          </select>
-                        </div>
-                        <div>
-                          <label className="block text-stone-600 mb-0.5">Share (%)</label>
-                          <input
-                            type="number"
-                            min="1"
-                            max="100"
-                            value={b.percentage}
-                            onChange={(e) => handleBeneficiaryChange(index, 'percentage', Number(e.target.value))}
-                            className="w-full px-2 py-1.5 border border-[#D8CBB9] rounded-md focus:ring-1 focus:ring-[#8B9A6E]"
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-
-                  <button
-                    type="button"
-                    onClick={handleAddBeneficiary}
-                    className="w-full py-2 text-xs font-semibold text-[#5A6644] bg-[#EAE2D6]/60 hover:bg-[#EAE2D6] rounded-xl border border-dashed border-[#D8CBB9] flex items-center justify-center space-x-1.5 transition"
-                  >
-                    <UserPlus className="w-3.5 h-3.5" />
-                    <span>Add Another Beneficiary</span>
-                  </button>
-                </div>
+                <BeneficiaryManager
+                  beneficiaries={beneficiaries}
+                  onChange={setBeneficiaries}
+                />
               </div>
 
               {/* Action Buttons */}
@@ -522,11 +435,22 @@ export const EnrollmentModal: React.FC<EnrollmentModalProps> = ({ isOpen, onClos
 
                 <div>
                   <span className="text-xs font-semibold text-stone-700">Designated Beneficiaries:</span>
-                  <div className="mt-1 space-y-1">
+                  <div className="mt-2 space-y-1.5">
                     {beneficiaries.map((b, idx) => (
-                      <div key={idx} className="flex justify-between text-xs text-stone-600">
-                        <span>{b.firstName} {b.lastName} ({b.relationship})</span>
-                        <span className="font-semibold text-stone-800">{b.percentage}% share</span>
+                      <div key={idx} className="flex items-center justify-between text-xs bg-white/70 p-2 rounded-xl border border-[#D8CBB9]/60">
+                        <div className="flex items-center space-x-2">
+                          <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${b.isPrimary !== false ? 'bg-[#8B9A6E] text-white' : 'bg-stone-700 text-white'}`}>
+                            {b.isPrimary !== false ? 'Primary' : 'Contingent'}
+                          </span>
+                          <span className="font-semibold text-stone-900">{b.firstName} {b.lastName}</span>
+                          <span className="text-stone-500">({b.relationship})</span>
+                          {b.guardianName && (
+                            <span className="text-amber-800 bg-amber-50 px-1.5 py-0.5 rounded text-[10px] border border-amber-200">
+                              Guardian: {b.guardianName}
+                            </span>
+                          )}
+                        </div>
+                        <span className="font-mono font-bold text-[#2E3523]">{b.percentage}% share</span>
                       </div>
                     ))}
                   </div>
