@@ -1066,6 +1066,207 @@ app.post('/api/admin/segments', authenticateToken, authorizeStaff, async (req, r
   }
 });
 
+// =======================================================
+// CLAIMS MANAGEMENT ENDPOINTS (INS-9)
+// =======================================================
+
+// GET /api/admin/claims — list all claims with insured person name, product, policy, and uploaded documents
+app.get('/api/admin/claims', authenticateToken, authorizeStaff, async (req, res) => {
+  const { status } = req.query;
+  try {
+    let query = `
+      SELECT
+        c.id,
+        c.claim_number AS "claimNumber",
+        c.policy_id AS "policyId",
+        p.policy_number AS "policyNumber",
+        c.user_id AS "userId",
+        u.first_name AS "insuredFirstName",
+        u.last_name AS "insuredLastName",
+        CONCAT(u.first_name, ' ', u.last_name) AS "insuredName",
+        u.email AS "insuredEmail",
+        u.phone AS "insuredPhone",
+        pr.id AS "productId",
+        pr.name AS "productName",
+        pr.code AS "productCode",
+        c.incident_type AS "incidentType",
+        c.incident_date AS "incidentDate",
+        c.description,
+        c.status,
+        c.claimed_amount AS "claimedAmount",
+        c.approved_amount AS "approvedAmount",
+        c.reviewer_notes AS "reviewerNotes",
+        c.reviewed_at AS "reviewedAt",
+        c.created_at AS "createdAt",
+        c.updated_at AS "updatedAt",
+        COALESCE(
+          json_agg(
+            json_build_object(
+              'id', cd.id,
+              'fileName', cd.file_name,
+              's3Key', cd.s3_key,
+              'contentType', cd.content_type,
+              'fileSize', cd.file_size,
+              'uploadedAt', cd.uploaded_at
+            )
+          ) FILTER (WHERE cd.id IS NOT NULL),
+          '[]'::json
+        ) AS documents
+      FROM claims c
+      JOIN policies p ON c.policy_id = p.id
+      JOIN users u ON c.user_id = u.id
+      JOIN products pr ON p.product_id = pr.id
+      LEFT JOIN claim_documents cd ON cd.claim_id = c.id
+    `;
+
+    const params = [];
+    if (status && status !== 'ALL') {
+      params.push(status);
+      query += ` WHERE c.status = $1`;
+    }
+
+    query += `
+      GROUP BY c.id, p.policy_number, u.first_name, u.last_name, u.email, u.phone, pr.id, pr.name, pr.code
+      ORDER BY c.created_at DESC
+    `;
+
+    const result = await pool.query(query, params);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching admin claims:', err);
+    res.status(500).json({ error: 'Database error: ' + err.message });
+  }
+});
+
+// PATCH /api/admin/claims/:id/status — update claim status (SUBMITTED, UNDER_REVIEW, APPROVED, REJECTED)
+app.patch('/api/admin/claims/:id/status', authenticateToken, authorizeStaff, async (req, res) => {
+  const { id } = req.params;
+  const { status, reviewerNotes, approvedAmount } = req.body;
+
+  const validStatuses = ['SUBMITTED', 'UNDER_REVIEW', 'APPROVED', 'REJECTED'];
+  if (!status || !validStatuses.includes(status)) {
+    return res.status(400).json({ 
+      error: `Invalid status. Must be one of: ${validStatuses.join(', ')}` 
+    });
+  }
+
+  try {
+    const updateQuery = `
+      UPDATE claims
+      SET
+        status = $1::text,
+        reviewer_notes = COALESCE($2::text, reviewer_notes),
+        approved_amount = CASE 
+          WHEN $1::text = 'APPROVED' AND $3::numeric IS NOT NULL THEN $3::numeric
+          WHEN $1::text = 'APPROVED' AND approved_amount IS NULL THEN claimed_amount
+          WHEN $1::text = 'REJECTED' THEN 0::numeric
+          ELSE approved_amount
+        END,
+        reviewed_by = $4::uuid,
+        reviewed_at = CURRENT_TIMESTAMP,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = $5::uuid
+      RETURNING *
+    `;
+
+    const result = await pool.query(updateQuery, [
+      status,
+      reviewerNotes || null,
+      approvedAmount !== undefined ? approvedAmount : null,
+      req.user.id,
+      id
+    ]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Claim not found.' });
+    }
+
+    res.json({
+      message: `Claim status successfully updated to "${status}".`,
+      claim: result.rows[0]
+    });
+  } catch (err) {
+    console.error('Error updating claim status:', err);
+    res.status(500).json({ error: 'Database error: ' + err.message });
+  }
+});
+
+// POST /api/claims — allow customer or admin to submit a claim (with optional document metadata)
+app.post('/api/claims', authenticateToken, async (req, res) => {
+  const { policyId, incidentType, incidentDate, description, claimedAmount, documents } = req.body;
+
+  if (!policyId || !incidentType || !incidentDate || !claimedAmount) {
+    return res.status(400).json({ error: 'Policy ID, Incident Type, Incident Date, and Claimed Amount are required.' });
+  }
+
+  try {
+    // Verify policy exists and belongs to user (or staff)
+    const policyRes = await pool.query('SELECT * FROM policies WHERE id = $1', [policyId]);
+    if (policyRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Policy not found.' });
+    }
+    const policy = policyRes.rows[0];
+
+    const randomDigits = Math.floor(100000 + Math.random() * 900000);
+    const claimNumber = `CLM-${new Date().getFullYear()}-${randomDigits}`;
+
+    const claimInsert = `
+      INSERT INTO claims (
+        policy_id, user_id, claim_number, incident_type, incident_date,
+        description, status, claimed_amount
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, 'SUBMITTED', $7)
+      RETURNING *
+    `;
+
+    const claimRes = await pool.query(claimInsert, [
+      policyId,
+      policy.user_id,
+      claimNumber,
+      incidentType,
+      incidentDate,
+      description || null,
+      parseFloat(claimedAmount)
+    ]);
+
+    const createdClaim = claimRes.rows[0];
+
+    // Insert attached documents (S3 metadata)
+    const insertedDocs = [];
+    if (Array.isArray(documents) && documents.length > 0) {
+      for (const doc of documents) {
+        const docInsert = `
+          INSERT INTO claim_documents (
+            claim_id, file_name, s3_key, content_type, file_size
+          )
+          VALUES ($1, $2, $3, $4, $5)
+          RETURNING *
+        `;
+        const s3Key = doc.s3Key || `claims/${createdClaim.id}/${Date.now()}_${(doc.fileName || 'document.pdf').replace(/\s+/g, '_')}`;
+        const docRes = await pool.query(docInsert, [
+          createdClaim.id,
+          doc.fileName || 'Supporting_Document.pdf',
+          s3Key,
+          doc.contentType || 'application/pdf',
+          doc.fileSize || 102400
+        ]);
+        insertedDocs.push(docRes.rows[0]);
+      }
+    }
+
+    res.status(201).json({
+      message: `Claim ${claimNumber} submitted successfully.`,
+      claim: {
+        ...createdClaim,
+        documents: insertedDocs
+      }
+    });
+  } catch (err) {
+    console.error('Error submitting claim:', err);
+    res.status(500).json({ error: 'Database error: ' + err.message });
+  }
+});
+
 // 4. Get Current Customer's Policies from Database
 app.get('/api/policies', authenticateToken, async (req, res) => {
   try {

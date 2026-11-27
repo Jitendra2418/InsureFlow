@@ -1,13 +1,14 @@
 ﻿import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Client, Product, Campaign, CampaignEvent, Segment, CustomerStats } from '../types';
+import { Client, Product, Campaign, CampaignEvent, Segment, CustomerStats, Claim, ClaimStatus } from '../types';
 import { apiRequest } from '../api';
 import { 
   Building2, Megaphone, ShieldCheck, PlusCircle, Search, RefreshCw, 
   LogOut, CheckCircle2, AlertCircle, MapPin, 
   Sparkles, Sliders, Hash, Pencil, Trash2, X, AlertTriangle,
-  Calendar, CalendarDays, Send, ArrowRight, Layers, Target, Users
+  Calendar, CalendarDays, Send, ArrowRight, Layers, Target, Users,
+  ClipboardList, FileText, Download, Check, Clock, XCircle, Eye
 } from 'lucide-react';
 
 const US_STATES = [
@@ -25,8 +26,8 @@ export const AdminDashboard: React.FC = () => {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
 
-  // Active top-level tab: 'clients' | 'campaigns' | 'events' | 'segments'
-  const [activeTab, setActiveTab] = useState<'clients' | 'campaigns' | 'events' | 'segments'>('clients');
+  // Active top-level tab: 'clients' | 'campaigns' | 'events' | 'segments' | 'claims'
+  const [activeTab, setActiveTab] = useState<'clients' | 'campaigns' | 'events' | 'segments' | 'claims'>('clients');
 
   // Helper to generate a random client ID
   const generateNewClientId = () => {
@@ -419,6 +420,88 @@ export const AdminDashboard: React.FC = () => {
     }
   };
 
+  // ── Claims tab state (INS-9) ────────────────────────────────────
+  const [claims, setClaims] = useState<Claim[]>([]);
+  const [isClaimsLoading, setIsClaimsLoading] = useState<boolean>(false);
+  const [claimStatusFilter, setClaimStatusFilter] = useState<string>('ALL');
+  const [claimSearchTerm, setClaimSearchTerm] = useState<string>('');
+  const [selectedClaimForReview, setSelectedClaimForReview] = useState<Claim | null>(null);
+  const [reviewStatus, setReviewStatus] = useState<ClaimStatus>('UNDER_REVIEW');
+  const [reviewerNotes, setReviewerNotes] = useState<string>('');
+  const [approvedAmount, setApprovedAmount] = useState<string>('');
+  const [isUpdatingClaim, setIsUpdatingClaim] = useState<boolean>(false);
+  const [claimActionSuccess, setClaimActionSuccess] = useState<string>('');
+  const [claimActionError, setClaimActionError] = useState<string>('');
+  const [viewingDocumentsClaim, setViewingDocumentsClaim] = useState<Claim | null>(null);
+
+  // Load claims from backend
+  const loadClaims = async (status?: string) => {
+    setIsClaimsLoading(true);
+    try {
+      const activeFilter = status !== undefined ? status : claimStatusFilter;
+      const url = activeFilter && activeFilter !== 'ALL' 
+        ? `/admin/claims?status=${activeFilter}` 
+        : '/admin/claims';
+      const data = await apiRequest<Claim[]>(url);
+      setClaims(data);
+    } catch (err) {
+      console.error('Failed to load claims:', err);
+    } finally {
+      setIsClaimsLoading(false);
+    }
+  };
+
+  // Quick update claim status
+  const handleQuickStatusChange = async (claimId: string, newStatus: ClaimStatus, note?: string) => {
+    setClaimActionError('');
+    setClaimActionSuccess('');
+    try {
+      const res = await apiRequest<{ message: string; claim: Claim }>(`/admin/claims/${claimId}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          status: newStatus,
+          reviewerNotes: note || `Status updated to ${newStatus} by admin.`
+        })
+      });
+      setClaimActionSuccess(res.message);
+      await loadClaims();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to update claim status.';
+      setClaimActionError(msg);
+    }
+  };
+
+  // Detailed review modal submit
+  const handleDetailedReviewSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedClaimForReview) return;
+    setIsUpdatingClaim(true);
+    setClaimActionError('');
+    setClaimActionSuccess('');
+    try {
+      const body: { status: ClaimStatus; reviewerNotes?: string; approvedAmount?: number } = {
+        status: reviewStatus,
+        reviewerNotes: reviewerNotes.trim() || undefined
+      };
+      if (reviewStatus === 'APPROVED' && approvedAmount) {
+        body.approvedAmount = parseFloat(approvedAmount);
+      }
+
+      const res = await apiRequest<{ message: string; claim: Claim }>(`/admin/claims/${selectedClaimForReview.id}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify(body)
+      });
+      setClaimActionSuccess(res.message);
+      setSelectedClaimForReview(null);
+      await loadClaims();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to update claim status.';
+      setClaimActionError(msg);
+    } finally {
+      setIsUpdatingClaim(false);
+    }
+  };
+
   // ── Fetch clients from backend ──────────────────────────────────
   const loadClients = async () => {
     setIsLoading(true);
@@ -451,6 +534,8 @@ export const AdminDashboard: React.FC = () => {
       loadEvents();
       loadSegments();
       loadCustomerStats();
+    } else if (activeTab === 'claims') {
+      loadClaims();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
@@ -755,6 +840,23 @@ export const AdminDashboard: React.FC = () => {
                 {segments.length}
               </span>
             )}
+          </button>
+
+          <button
+            onClick={() => setActiveTab('claims')}
+            className={`inline-flex items-center space-x-2.5 px-6 py-3 rounded-2xl text-sm font-bold transition-all ${
+              activeTab === 'claims'
+                ? 'bg-[#5A6644] text-white shadow-md shadow-[#5A6644]/25 scale-[1.01]'
+                : 'bg-[#EAE2D6] text-stone-700 hover:bg-[#ded4c6] hover:text-stone-900 border border-[#D8CBB9]'
+            }`}
+          >
+            <ClipboardList className="w-4 h-4" />
+            <span>Claims</span>
+            <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${
+              activeTab === 'claims' ? 'bg-white/20 text-white' : 'bg-[#D8CBB9] text-stone-700'
+            }`}>
+              {claims.length}
+            </span>
           </button>
         </div>
 
@@ -2448,6 +2550,585 @@ export const AdminDashboard: React.FC = () => {
                 </table>
               </div>
             </div>
+          </div>
+        )}
+
+        {/* TAB 5: CLAIMS (INS-9) */}
+        {activeTab === 'claims' && (
+          <div className="space-y-6 animate-in fade-in duration-200">
+            {/* Header & Status Filter Banner */}
+            <div className="bg-gradient-to-r from-[#5A6644] to-[#454f34] rounded-3xl p-6 sm:p-7 text-white shadow-md border border-[#5A6644]">
+              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                <div>
+                  <div className="flex items-center space-x-2 text-[#D8E2C8] text-xs font-bold uppercase tracking-wider mb-1">
+                    <ClipboardList className="w-4 h-4" />
+                    <span>Claims Adjudication & Lifecycle</span>
+                  </div>
+                  <h2 className="text-xl sm:text-2xl font-black tracking-tight">
+                    Customer Claims & Incident Submissions
+                  </h2>
+                  <p className="text-xs text-[#D8E2C8] mt-1 max-w-2xl">
+                    Review incoming claims, verify claimant identity, review policies & product coverage, inspect S3-stored evidence documents, and transition statuses.
+                  </p>
+                </div>
+
+                <div className="bg-white/10 backdrop-blur-md px-4 py-2.5 rounded-2xl border border-white/20 text-right">
+                  <p className="text-[10px] uppercase font-bold text-[#D8E2C8]">Total Claims Recorded</p>
+                  <p className="text-xl font-extrabold text-white">{claims.length}</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Claims Metric Summary Cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              <div 
+                onClick={() => { setClaimStatusFilter('SUBMITTED'); loadClaims('SUBMITTED'); }}
+                className={`p-4 rounded-2xl border transition cursor-pointer ${
+                  claimStatusFilter === 'SUBMITTED' 
+                    ? 'bg-blue-100/80 border-blue-400 ring-2 ring-blue-500/20' 
+                    : 'bg-[#EAE2D6] border-[#D8CBB9] hover:bg-[#ded4c6]'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-blue-900">Submitted</span>
+                  <Clock className="w-4 h-4 text-blue-600" />
+                </div>
+                <p className="text-2xl font-black text-blue-950 mt-1">
+                  {claims.filter(c => c.status === 'SUBMITTED').length}
+                </p>
+                <p className="text-[10px] text-blue-800 mt-0.5">Awaiting initial triage</p>
+              </div>
+
+              <div 
+                onClick={() => { setClaimStatusFilter('UNDER_REVIEW'); loadClaims('UNDER_REVIEW'); }}
+                className={`p-4 rounded-2xl border transition cursor-pointer ${
+                  claimStatusFilter === 'UNDER_REVIEW' 
+                    ? 'bg-amber-100/80 border-amber-400 ring-2 ring-amber-500/20' 
+                    : 'bg-[#EAE2D6] border-[#D8CBB9] hover:bg-[#ded4c6]'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-amber-900">Under Review</span>
+                  <FileText className="w-4 h-4 text-amber-600" />
+                </div>
+                <p className="text-2xl font-black text-amber-950 mt-1">
+                  {claims.filter(c => c.status === 'UNDER_REVIEW').length}
+                </p>
+                <p className="text-[10px] text-amber-800 mt-0.5">Assigned & actively evaluated</p>
+              </div>
+
+              <div 
+                onClick={() => { setClaimStatusFilter('APPROVED'); loadClaims('APPROVED'); }}
+                className={`p-4 rounded-2xl border transition cursor-pointer ${
+                  claimStatusFilter === 'APPROVED' 
+                    ? 'bg-emerald-100/80 border-emerald-400 ring-2 ring-emerald-500/20' 
+                    : 'bg-[#EAE2D6] border-[#D8CBB9] hover:bg-[#ded4c6]'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-900">Approved</span>
+                  <Check className="w-4 h-4 text-emerald-600" />
+                </div>
+                <p className="text-2xl font-black text-emerald-950 mt-1">
+                  {claims.filter(c => c.status === 'APPROVED').length}
+                </p>
+                <p className="text-[10px] text-emerald-800 mt-0.5">Authorized for payout</p>
+              </div>
+
+              <div 
+                onClick={() => { setClaimStatusFilter('REJECTED'); loadClaims('REJECTED'); }}
+                className={`p-4 rounded-2xl border transition cursor-pointer ${
+                  claimStatusFilter === 'REJECTED' 
+                    ? 'bg-red-100/80 border-red-400 ring-2 ring-red-500/20' 
+                    : 'bg-[#EAE2D6] border-[#D8CBB9] hover:bg-[#ded4c6]'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-red-900">Rejected</span>
+                  <XCircle className="w-4 h-4 text-red-600" />
+                </div>
+                <p className="text-2xl font-black text-red-950 mt-1">
+                  {claims.filter(c => c.status === 'REJECTED').length}
+                </p>
+                <p className="text-[10px] text-red-800 mt-0.5">Declined or non-covered</p>
+              </div>
+            </div>
+
+            {/* Action Feedback Alerts */}
+            {claimActionError && (
+              <div className="p-4 bg-red-50 border border-red-200 text-red-700 text-xs rounded-2xl flex items-center space-x-2.5">
+                <AlertCircle className="w-4 h-4 flex-shrink-0 text-red-500" />
+                <span>{claimActionError}</span>
+              </div>
+            )}
+            {claimActionSuccess && (
+              <div className="p-4 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs rounded-2xl flex items-center space-x-2.5">
+                <CheckCircle2 className="w-4 h-4 flex-shrink-0 text-emerald-600" />
+                <span>{claimActionSuccess}</span>
+              </div>
+            )}
+
+            {/* Claims Table Container */}
+            <div className="bg-[#EAE2D6] border border-[#D8CBB9] rounded-3xl p-6 sm:p-8 shadow-sm space-y-5">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-4 border-b border-[#D8CBB9]/80">
+                <div>
+                  <h3 className="text-lg font-bold text-[#2E3523] flex items-center space-x-2">
+                    <ClipboardList className="w-5 h-5 text-[#5A6644]" />
+                    <span>Claims Registry</span>
+                  </h3>
+                  <p className="text-xs text-stone-600 mt-0.5">
+                    Click any claim's status pill or action buttons to move status between Submitted, Under Review, Approved, or Rejected.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2.5 w-full sm:w-auto">
+                  {/* Status Filter Tabs */}
+                  <div className="flex rounded-xl bg-white border border-[#D8CBB9] p-0.5 text-xs font-bold">
+                    {['ALL', 'SUBMITTED', 'UNDER_REVIEW', 'APPROVED', 'REJECTED'].map((st) => (
+                      <button
+                        key={st}
+                        type="button"
+                        onClick={() => { setClaimStatusFilter(st); loadClaims(st); }}
+                        className={`px-2.5 py-1.5 rounded-lg transition text-[11px] ${
+                          claimStatusFilter === st 
+                            ? 'bg-[#5A6644] text-white shadow-sm' 
+                            : 'text-stone-600 hover:text-stone-900'
+                        }`}
+                      >
+                        {st === 'ALL' ? 'All' : st === 'UNDER_REVIEW' ? 'Review' : st.charAt(0) + st.slice(1).toLowerCase()}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Search Bar */}
+                  <div className="relative flex-1 sm:w-64">
+                    <Search className="w-3.5 h-3.5 text-stone-400 absolute left-3 top-3" />
+                    <input
+                      type="text"
+                      placeholder="Search claimant, claim #, product..."
+                      value={claimSearchTerm}
+                      onChange={(e) => setClaimSearchTerm(e.target.value)}
+                      className="w-full pl-9 pr-3 py-2 bg-white border border-[#D8CBB9] rounded-xl text-xs text-stone-900 placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-[#8B9A6E]"
+                    />
+                  </div>
+
+                  <button
+                    onClick={() => loadClaims()}
+                    disabled={isClaimsLoading}
+                    title="Refresh Claims"
+                    className="p-2 bg-white border border-[#D8CBB9] rounded-xl text-stone-600 hover:text-[#5A6644] hover:bg-stone-50 transition"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${isClaimsLoading ? 'animate-spin' : ''}`} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Table */}
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="border-b border-[#D8CBB9] text-[11px] font-bold uppercase tracking-wider text-stone-600">
+                      <th className="py-3 px-4">Date Received</th>
+                      <th className="py-3 px-4">Claim #</th>
+                      <th className="py-3 px-4">Insured Person</th>
+                      <th className="py-3 px-4">Product Claimed</th>
+                      <th className="py-3 px-4">Incident Details</th>
+                      <th className="py-3 px-4">Amount Claimed</th>
+                      <th className="py-3 px-4">Supporting Documents</th>
+                      <th className="py-3 px-4 text-center">Status</th>
+                      <th className="py-3 px-4 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#D8CBB9]/60 text-xs text-stone-800">
+                    {isClaimsLoading ? (
+                      <tr>
+                        <td colSpan={9} className="py-8 text-center text-stone-500">
+                          <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-[#5A6644]" />
+                          Loading claims from PostgreSQL database...
+                        </td>
+                      </tr>
+                    ) : claims.filter(c =>
+                        c.claimNumber.toLowerCase().includes(claimSearchTerm.toLowerCase()) ||
+                        c.insuredName.toLowerCase().includes(claimSearchTerm.toLowerCase()) ||
+                        c.productName.toLowerCase().includes(claimSearchTerm.toLowerCase()) ||
+                        c.policyNumber.toLowerCase().includes(claimSearchTerm.toLowerCase()) ||
+                        c.incidentType.toLowerCase().includes(claimSearchTerm.toLowerCase())
+                      ).length === 0 ? (
+                      <tr>
+                        <td colSpan={9} className="py-8 text-center text-stone-500">
+                          {claimSearchTerm 
+                            ? 'No claims match your search query.' 
+                            : claimStatusFilter !== 'ALL'
+                              ? `No claims with status "${claimStatusFilter}".`
+                              : 'No claims recorded in the database yet.'}
+                        </td>
+                      </tr>
+                    ) : (
+                      claims
+                        .filter(c =>
+                          c.claimNumber.toLowerCase().includes(claimSearchTerm.toLowerCase()) ||
+                          c.insuredName.toLowerCase().includes(claimSearchTerm.toLowerCase()) ||
+                          c.productName.toLowerCase().includes(claimSearchTerm.toLowerCase()) ||
+                          c.policyNumber.toLowerCase().includes(claimSearchTerm.toLowerCase()) ||
+                          c.incidentType.toLowerCase().includes(claimSearchTerm.toLowerCase())
+                        )
+                        .map((claim) => {
+                          const statusBadges: Record<ClaimStatus, { bg: string; text: string; border: string }> = {
+                            SUBMITTED: { bg: 'bg-blue-100', text: 'text-blue-800', border: 'border-blue-300' },
+                            UNDER_REVIEW: { bg: 'bg-amber-100', text: 'text-amber-800', border: 'border-amber-300' },
+                            APPROVED: { bg: 'bg-emerald-100', text: 'text-emerald-800', border: 'border-emerald-300' },
+                            REJECTED: { bg: 'bg-red-100', text: 'text-red-800', border: 'border-red-300' }
+                          };
+                          const badge = statusBadges[claim.status] || { bg: 'bg-stone-100', text: 'text-stone-700', border: 'border-stone-300' };
+
+                          return (
+                            <tr key={claim.id} className="hover:bg-white/40 transition">
+                              {/* Date Received */}
+                              <td className="py-3.5 px-4 font-mono text-stone-700 whitespace-nowrap">
+                                <div className="font-bold">
+                                  {new Date(claim.createdAt).toLocaleDateString('en-US', {
+                                    year: 'numeric',
+                                    month: 'short',
+                                    day: 'numeric'
+                                  })}
+                                </div>
+                                <div className="text-[10px] text-stone-400">
+                                  {new Date(claim.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                </div>
+                              </td>
+
+                              {/* Claim Number */}
+                              <td className="py-3.5 px-4 font-mono font-bold text-stone-700 whitespace-nowrap">
+                                <span className="bg-white/90 border border-[#D8CBB9] px-2 py-0.5 rounded-md">
+                                  {claim.claimNumber}
+                                </span>
+                              </td>
+
+                              {/* Insured Person */}
+                              <td className="py-3.5 px-4 font-bold text-[#2E3523]">
+                                <div>{claim.insuredName}</div>
+                                <div className="text-[11px] font-normal text-stone-500">
+                                  {claim.insuredEmail}
+                                </div>
+                                <div className="text-[10px] font-mono text-stone-400">
+                                  Policy: {claim.policyNumber}
+                                </div>
+                              </td>
+
+                              {/* Product Claimed */}
+                              <td className="py-3.5 px-4">
+                                <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-[#8B9A6E]/15 text-[#3D472E] border border-[#8B9A6E]/30">
+                                  {claim.productName}
+                                </span>
+                              </td>
+
+                              {/* Incident Details */}
+                              <td className="py-3.5 px-4 max-w-xs">
+                                <div className="font-semibold text-stone-800">{claim.incidentType}</div>
+                                <div className="text-[11px] text-stone-500">
+                                  Incident Date: {new Date(claim.incidentDate).toLocaleDateString()}
+                                </div>
+                                {claim.description && (
+                                  <div className="text-[11px] text-stone-400 truncate mt-0.5" title={claim.description}>
+                                    {claim.description}
+                                  </div>
+                                )}
+                              </td>
+
+                              {/* Claimed Amount */}
+                              <td className="py-3.5 px-4 font-bold text-stone-900 whitespace-nowrap">
+                                <div>${parseFloat(claim.claimedAmount as string).toLocaleString()}</div>
+                                {claim.status === 'APPROVED' && claim.approvedAmount !== undefined && (
+                                  <div className="text-[10px] text-emerald-700 font-semibold">
+                                    Approved: ${parseFloat(claim.approvedAmount as string).toLocaleString()}
+                                  </div>
+                                )}
+                              </td>
+
+                              {/* Supporting Documents (S3 linked) */}
+                              <td className="py-3.5 px-4">
+                                {claim.documents && claim.documents.length > 0 ? (
+                                  <div className="space-y-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => setViewingDocumentsClaim(claim)}
+                                      className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-white border border-[#D8CBB9] text-xs font-semibold text-stone-700 hover:text-[#5A6644] hover:border-[#5A6644] transition shadow-xs"
+                                    >
+                                      <FileText className="w-3.5 h-3.5 text-blue-600" />
+                                      <span>{claim.documents.length} Document{claim.documents.length > 1 ? 's' : ''}</span>
+                                      <Eye className="w-3 h-3 ml-0.5 text-stone-400" />
+                                    </button>
+                                    <p className="text-[9px] text-stone-400 font-mono">
+                                      Stored on AWS S3
+                                    </p>
+                                  </div>
+                                ) : (
+                                  <span className="text-[11px] text-stone-400 italic">No files attached</span>
+                                )}
+                              </td>
+
+                              {/* Status Badge */}
+                              <td className="py-3.5 px-4 text-center">
+                                <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold border ${badge.bg} ${badge.text} ${badge.border}`}>
+                                  {claim.status === 'UNDER_REVIEW' ? 'Under Review' : claim.status.charAt(0) + claim.status.slice(1).toLowerCase()}
+                                </span>
+                              </td>
+
+                              {/* Status Action Buttons */}
+                              <td className="py-3.5 px-4 text-right">
+                                <div className="flex items-center justify-end space-x-1.5">
+                                  {/* Review Modal Trigger */}
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setSelectedClaimForReview(claim);
+                                      setReviewStatus(claim.status);
+                                      setReviewerNotes(claim.reviewerNotes || '');
+                                      setApprovedAmount(claim.approvedAmount ? String(claim.approvedAmount) : String(claim.claimedAmount));
+                                    }}
+                                    className="px-2.5 py-1.5 rounded-lg bg-[#5A6644] hover:bg-[#495436] text-white text-[11px] font-bold transition shadow-xs flex items-center space-x-1"
+                                    title="Open status management & adjudication modal"
+                                  >
+                                    <Sliders className="w-3 h-3" />
+                                    <span>Manage</span>
+                                  </button>
+
+                                  {/* Quick Status Dropdown Menu */}
+                                  <select
+                                    value={claim.status}
+                                    onChange={(e) => handleQuickStatusChange(claim.id, e.target.value as ClaimStatus)}
+                                    className="px-2 py-1 bg-white border border-[#D8CBB9] rounded-lg text-[11px] font-bold text-stone-700 hover:border-stone-400 focus:outline-none focus:ring-1 focus:ring-[#8B9A6E]"
+                                    title="Quick change claim status"
+                                  >
+                                    <option value="SUBMITTED">Submitted</option>
+                                    <option value="UNDER_REVIEW">Under Review</option>
+                                    <option value="APPROVED">Approved</option>
+                                    <option value="REJECTED">Rejected</option>
+                                  </select>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Document Viewer Modal */}
+            {viewingDocumentsClaim && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
+                <div className="bg-[#EAE2D6] border border-[#D8CBB9] rounded-3xl p-6 sm:p-7 max-w-xl w-full shadow-2xl relative">
+                  <div className="flex items-center justify-between pb-4 border-b border-[#D8CBB9]/80">
+                    <div className="flex items-center space-x-2 text-[#5A6644]">
+                      <FileText className="w-5 h-5" />
+                      <div>
+                        <h3 className="text-lg font-bold text-[#2E3523]">Claim Supporting Documents</h3>
+                        <p className="text-xs text-stone-500 font-mono">Claim: {viewingDocumentsClaim.claimNumber}</p>
+                      </div>
+                    </div>
+                    <button 
+                      onClick={() => setViewingDocumentsClaim(null)} 
+                      className="text-stone-500 hover:text-stone-800 p-1 rounded-lg hover:bg-white/60 transition"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
+                  </div>
+
+                  <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-2xl text-xs text-blue-900 flex items-center justify-between">
+                    <div className="flex items-center space-x-2">
+                      <ShieldCheck className="w-4 h-4 text-blue-600 flex-shrink-0" />
+                      <span>Claimant: <strong>{viewingDocumentsClaim.insuredName}</strong> • {viewingDocumentsClaim.productName}</span>
+                    </div>
+                    <span className="text-[10px] font-mono font-bold bg-blue-200/60 px-2 py-0.5 rounded text-blue-900">
+                      AWS S3 Target
+                    </span>
+                  </div>
+
+                  <div className="mt-4 space-y-2 max-h-80 overflow-y-auto">
+                    {viewingDocumentsClaim.documents.map((doc, idx) => (
+                      <div key={doc.id || idx} className="p-3 bg-white border border-[#D8CBB9] rounded-xl flex items-center justify-between hover:border-[#8B9A6E] transition">
+                        <div className="flex items-center space-x-3 overflow-hidden">
+                          <div className="w-8 h-8 rounded-lg bg-red-100 flex items-center justify-center text-red-600 flex-shrink-0">
+                            <FileText className="w-4 h-4" />
+                          </div>
+                          <div className="overflow-hidden">
+                            <p className="text-xs font-bold text-stone-800 truncate" title={doc.fileName}>{doc.fileName}</p>
+                            <p className="text-[10px] text-stone-400 font-mono truncate" title={doc.s3Key}>
+                              s3://insureflow-claim-documents/{doc.s3Key}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center space-x-2 flex-shrink-0">
+                          {doc.fileSize && (
+                            <span className="text-[10px] text-stone-400 font-mono">
+                              {(doc.fileSize / 1024).toFixed(1)} KB
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => alert(`Simulated S3 secure download for key:\n${doc.s3Key}\n\nIn production, this initiates a signed presigned AWS S3 GET URL.`)}
+                            className="p-1.5 bg-stone-100 hover:bg-[#5A6644] hover:text-white rounded-lg text-stone-600 transition"
+                            title="Download document from AWS S3"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="mt-5 flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => setViewingDocumentsClaim(null)}
+                      className="px-4 py-2 bg-stone-300 hover:bg-stone-400 text-stone-800 rounded-xl text-xs font-bold transition"
+                    >
+                      Close
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Detailed Status Adjudication Modal */}
+            {selectedClaimForReview && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
+                <div className="bg-[#EAE2D6] border border-[#D8CBB9] rounded-3xl p-6 sm:p-8 max-w-lg w-full shadow-2xl relative">
+                  <div className="flex items-center justify-between pb-4 border-b border-[#D8CBB9]/80">
+                    <div className="flex items-center space-x-2 text-[#5A6644]">
+                      <Sliders className="w-5 h-5" />
+                      <div>
+                        <h3 className="text-xl font-bold text-[#2E3523]">Manage Claim Status</h3>
+                        <p className="text-xs text-stone-500 font-mono">Claim ID: {selectedClaimForReview.claimNumber}</p>
+                      </div>
+                    </div>
+                    <button 
+                      onClick={() => setSelectedClaimForReview(null)} 
+                      className="text-stone-500 hover:text-stone-800 p-1 rounded-lg hover:bg-white/60 transition"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
+                  </div>
+
+                  <form onSubmit={handleDetailedReviewSubmit} className="mt-5 space-y-4">
+                    {/* Summary Card */}
+                    <div className="p-3 bg-white border border-[#D8CBB9] rounded-2xl text-xs space-y-1">
+                      <div className="flex justify-between">
+                        <span className="text-stone-500 font-medium">Claimant:</span>
+                        <span className="font-bold text-stone-800">{selectedClaimForReview.insuredName}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-stone-500 font-medium">Product / Coverage:</span>
+                        <span className="font-bold text-[#3D472E]">{selectedClaimForReview.productName}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-stone-500 font-medium">Incident:</span>
+                        <span className="font-semibold text-stone-700">{selectedClaimForReview.incidentType}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-stone-500 font-medium">Claimed Amount:</span>
+                        <span className="font-extrabold text-stone-900">${parseFloat(selectedClaimForReview.claimedAmount as string).toLocaleString()}</span>
+                      </div>
+                    </div>
+
+                    {/* Status Radio / Select */}
+                    <div>
+                      <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-2">
+                        Move Claim Status To:
+                      </label>
+                      <div className="grid grid-cols-2 gap-2">
+                        {(['SUBMITTED', 'UNDER_REVIEW', 'APPROVED', 'REJECTED'] as ClaimStatus[]).map((st) => (
+                          <button
+                            key={st}
+                            type="button"
+                            onClick={() => setReviewStatus(st)}
+                            className={`p-3 rounded-xl border text-xs font-bold transition flex items-center justify-between ${
+                              reviewStatus === st
+                                ? st === 'APPROVED' 
+                                  ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
+                                  : st === 'REJECTED'
+                                    ? 'bg-red-600 text-white border-red-600 shadow-sm'
+                                    : st === 'UNDER_REVIEW'
+                                      ? 'bg-amber-600 text-white border-amber-600 shadow-sm'
+                                      : 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                                : 'bg-white border-[#D8CBB9] text-stone-700 hover:bg-stone-50'
+                            }`}
+                          >
+                            <span>
+                              {st === 'UNDER_REVIEW' ? 'Under Review' : st.charAt(0) + st.slice(1).toLowerCase()}
+                            </span>
+                            {reviewStatus === st && <Check className="w-3.5 h-3.5" />}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Approved Amount (Only if APPROVED) */}
+                    {reviewStatus === 'APPROVED' && (
+                      <div>
+                        <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1">
+                          Approved Payout Amount ($)
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={approvedAmount}
+                          onChange={(e) => setApprovedAmount(e.target.value)}
+                          placeholder="Enter approved amount"
+                          className="w-full px-3.5 py-2.5 bg-white border border-[#D8CBB9] rounded-xl text-xs text-stone-900 font-bold focus:ring-2 focus:ring-[#8B9A6E]"
+                          required
+                        />
+                      </div>
+                    )}
+
+                    {/* Reviewer Adjudication Notes */}
+                    <div>
+                      <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1">
+                        Reviewer Notes & Justification
+                      </label>
+                      <textarea
+                        rows={3}
+                        value={reviewerNotes}
+                        onChange={(e) => setReviewerNotes(e.target.value)}
+                        placeholder="Add notes for this adjudication decision, policy clause checks, or required customer follow-up..."
+                        className="w-full px-3.5 py-2.5 bg-white border border-[#D8CBB9] rounded-xl text-xs text-stone-900 focus:ring-2 focus:ring-[#8B9A6E]"
+                      />
+                    </div>
+
+                    {/* Submit Actions */}
+                    <div className="flex justify-end space-x-3 pt-3">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedClaimForReview(null)}
+                        className="px-4 py-2.5 bg-stone-200 hover:bg-stone-300 text-stone-800 text-xs font-bold rounded-xl transition"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={isUpdatingClaim}
+                        className="px-6 py-2.5 bg-[#5A6644] hover:bg-[#495436] text-white text-xs font-bold rounded-xl transition shadow-md flex items-center space-x-1.5"
+                      >
+                        {isUpdatingClaim ? (
+                          <>
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                            <span>Saving Status...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Check className="w-3.5 h-3.5" />
+                            <span>Confirm Status Update</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </main>
