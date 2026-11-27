@@ -129,3 +129,41 @@ export interface CustomerStats {
   uninsuredCount: number;
   totalCustomers: number;
 }
+
+export interface ClaimDocument {
+  id: string;
+  fileName: string;
+  s3Key: string;
+  contentType?: string;
+  fileSize?: number;
+  uploadedAt: string;
+}
+
+export type ClaimStatus = 'SUBMITTED' | 'UNDER_REVIEW' | 'APPROVED' | 'REJECTED';
+
+export interface Claim {
+  id: string;
+  claimNumber: string;
+  policyId: string;
+  policyNumber: string;
+  userId: string;
+  insuredFirstName: string;
+  insuredLastName: string;
+  insuredName: string;
+  insuredEmail: string;
+  insuredPhone?: string;
+  productId: string;
+  productName: string;
+  productCode?: string;
+  incidentType: string;
+  incidentDate: string;
+  description?: string;
+  status: ClaimStatus;
+  claimedAmount: number | string;
+  approvedAmount?: number | string;
+  reviewerNotes?: string;
+  reviewedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  documents: ClaimDocument[];
+}
