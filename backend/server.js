@@ -23,13 +23,13 @@ app.use((req, res, next) => {
 });
 
 // PostgreSQL Pool Connection
-const dbPort = parseInt(process.env.DB_PORT || '5432', 10);
+const dbPort = parseInt(process.env.DB_PORT || '5433', 10);
 const pool = new Pool({
   host: process.env.DB_HOST || 'localhost',
   port: dbPort,
   database: process.env.DB_NAME || 'insureflow',
   user: process.env.DB_USER || 'insureflow_user',
-  password: process.env.DB_PASSWORD || 'InsureFlow2026!',
+  password: process.env.DB_PASSWORD || 'your_db_password',
   connectionTimeoutMillis: 5000
 });
 
@@ -940,18 +940,15 @@ app.post('/api/enrollment/enroll', authenticateToken, async (req, res) => {
       ]);
     }
 
-    // 7. Record Campaign Event & Initial Policy Audit Log
-    if (campaignId) {
+    // 7. Initial Policy Audit Log
+    try {
       await client.query(`
-        INSERT INTO campaign_events (campaign_id, event_type, user_id, metadata)
-        VALUES ($1, 'CUSTOMER_ENROLLMENT', $2, $3)
-      `, [campaignId, req.user.id, JSON.stringify({ policyNumber, coverAmount, campaignCode })]);
+        INSERT INTO policy_audit_logs (policy_id, changed_by_user_id, action, new_value)
+        VALUES ($1, $2, 'POLICY_ENROLLED', $3)
+      `, [createdPolicy.id, req.user.id, JSON.stringify({ policyNumber, coverAmount, monthlyPremium, campaignCode })]);
+    } catch (auditErr) {
+      console.warn('Audit log write warning:', auditErr.message);
     }
-
-    await client.query(`
-      INSERT INTO policy_audit_logs (policy_id, user_id, action, notes)
-      VALUES ($1, $2, 'POLICY_ENROLLED', 'Initial customer enrollment in AD&D coverage')
-    `, [createdPolicy.id, req.user.id]);
 
     await client.query('COMMIT');
 
@@ -1059,20 +1056,28 @@ app.put('/api/policies/:id', authenticateToken, async (req, res) => {
 
       // Audit Log for Cover Amount
       if (parseFloat(current.cover_amount) !== newCoverAmount) {
-        await client.query(`
-          INSERT INTO policy_audit_logs (policy_id, user_id, action, field_name, old_value, new_value, notes)
-          VALUES ($1, $2, 'UPDATE_COVER_AMOUNT', 'cover_amount', $3, $4, 'Customer updated principal sum coverage')
-        `, [policyId, req.user.id, current.cover_amount.toString(), newCoverAmount.toString()]);
+        try {
+          await client.query(`
+            INSERT INTO policy_audit_logs (policy_id, changed_by_user_id, action, old_value, new_value)
+            VALUES ($1, $2, 'UPDATE_COVER_AMOUNT', $3, $4)
+          `, [policyId, req.user.id, JSON.stringify({ coverAmount: current.cover_amount }), JSON.stringify({ coverAmount: newCoverAmount })]);
+        } catch (logErr) {
+          console.warn('Cover audit log warning:', logErr.message);
+        }
       }
 
       // Audit Log for Address
       const oldAddrStr = `${current.address_line1 || ''}, ${current.city || ''}, ${current.state || ''} ${current.zip_code || ''}`;
       const newAddrStr = `${newAddress1}, ${newCity}, ${newState} ${newZip}`;
       if (oldAddrStr !== newAddrStr) {
-        await client.query(`
-          INSERT INTO policy_audit_logs (policy_id, user_id, action, field_name, old_value, new_value, notes)
-          VALUES ($1, $2, 'UPDATE_ADDRESS', 'mailing_address', $3, $4, 'Customer updated residential mailing address')
-        `, [policyId, req.user.id, oldAddrStr, newAddrStr]);
+        try {
+          await client.query(`
+            INSERT INTO policy_audit_logs (policy_id, changed_by_user_id, action, old_value, new_value)
+            VALUES ($1, $2, 'UPDATE_ADDRESS', $3, $4)
+          `, [policyId, req.user.id, JSON.stringify({ address: oldAddrStr }), JSON.stringify({ address: newAddrStr })]);
+        } catch (logErr) {
+          console.warn('Address audit log warning:', logErr.message);
+        }
       }
 
       // Update Beneficiaries if provided
@@ -1092,11 +1097,14 @@ app.put('/api/policies/:id', authenticateToken, async (req, res) => {
           ]);
         }
 
-        const benSummary = beneficiaries.map(b => `${b.firstName} ${b.lastName} (${b.percentage}%)`).join(', ');
-        await client.query(`
-          INSERT INTO policy_audit_logs (policy_id, user_id, action, field_name, old_value, new_value, notes)
-          VALUES ($1, $2, 'UPDATE_BENEFICIARIES', 'beneficiaries', NULL, $3, 'Customer updated beneficiary designation')
-        `, [policyId, req.user.id, benSummary]);
+        try {
+          await client.query(`
+            INSERT INTO policy_audit_logs (policy_id, changed_by_user_id, action, new_value)
+            VALUES ($1, $2, 'UPDATE_BENEFICIARIES', $3)
+          `, [policyId, req.user.id, JSON.stringify({ beneficiaries })]);
+        } catch (logErr) {
+          console.warn('Beneficiary audit log warning:', logErr.message);
+        }
       }
 
       await client.query('COMMIT');
