@@ -178,45 +178,52 @@ export function generateInsuranceCertificate(policy: Policy, user: User | null):
   doc.text('Group Rate: $0.60 per $1,000 of coverage', 15 + boxWidth + 10, y + 20);
 
   // 6. Beneficiaries Section
-  y += 31;
+  y += 28;
   doc.setFillColor(sandCard[0], sandCard[1], sandCard[2]);
-  doc.rect(15, y, pageWidth - 30, 7, 'F');
+  doc.rect(15, y, pageWidth - 30, 6.5, 'F');
   doc.setTextColor(darkOlive[0], darkOlive[1], darkOlive[2]);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9);
-  doc.text('3. DESIGNATED BENEFICIARIES ALLOCATION', 18, y + 5);
+  doc.setFontSize(8.5);
+  doc.text('3. DESIGNATED BENEFICIARIES ALLOCATION', 18, y + 4.5);
 
-  y += 10;
+  y += 8.5;
   // Table Header
   doc.setFillColor(240, 236, 230);
   doc.rect(15, y, pageWidth - 30, 6, 'F');
   doc.setTextColor(darkOlive[0], darkOlive[1], darkOlive[2]);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(7.5);
-  doc.text('BENEFICIARY NAME & CUSTODIAN', 20, y + 4);
-  doc.text('RELATIONSHIP / DESIGNATION', 95, y + 4);
-  doc.text('ALLOCATION SHARE', 150, y + 4);
+  doc.text('BENEFICIARY NAME & CUSTODIAN', 20, y + 4.2);
+  doc.text('RELATIONSHIP / DESIGNATION', 95, y + 4.2);
+  doc.text('ALLOCATION SHARE', 152, y + 4.2);
 
-  y += 7;
+  // Ample spacing between header bar and first data row to prevent overlap
+  y += 8;
   doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
   doc.setTextColor(charcoal[0], charcoal[1], charcoal[2]);
 
   if (policy.beneficiaries && policy.beneficiaries.length > 0) {
-    policy.beneficiaries.forEach((b) => {
+    policy.beneficiaries.forEach((b, idx) => {
+      // Subtle alternate zebra row tint
+      if (idx % 2 === 1) {
+        doc.setFillColor(248, 246, 242);
+        doc.rect(15, y - 3.5, pageWidth - 30, 5.2, 'F');
+      }
       const nameStr = b.guardianName
         ? `${b.firstName} ${b.lastName} (Guardian: ${b.guardianName})`
         : `${b.firstName} ${b.lastName}`;
       const relStr = `${b.relationship || 'Spouse'} • ${b.isPrimary !== false ? 'Primary' : 'Contingent'}`;
       doc.text(nameStr.substring(0, 38), 20, y);
       doc.text(relStr.substring(0, 30), 95, y);
-      doc.text(`${Number(b.percentage).toFixed(2)}%`, 150, y);
-      y += 5.5;
+      doc.text(`${Number(b.percentage).toFixed(2)}%`, 152, y);
+      y += 5.2;
     });
   } else {
     doc.text('Standard Estate / Legal Heirs as per Law', 20, y);
     doc.text('Estate • Primary', 95, y);
-    doc.text('100.00%', 150, y);
-    y += 5.5;
+    doc.text('100.00%', 152, y);
+    y += 5.2;
   }
 
   // 7. Terms & Conditions Summary Box

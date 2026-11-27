@@ -193,12 +193,19 @@ CREATE TABLE IF NOT EXISTS claim_documents (
 -- TABLE: campaign_events
 -- ============================================================
 CREATE TABLE IF NOT EXISTS campaign_events (
-  id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  campaign_id  UUID NOT NULL REFERENCES campaigns(id),
-  event_type   VARCHAR(50) NOT NULL,
-  user_id      UUID REFERENCES users(id),
-  metadata     JSONB,
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  campaign_id       UUID NOT NULL REFERENCES campaigns(id),
+  event_id          VARCHAR(50),
+  channel           VARCHAR(50),
+  media             VARCHAR(50),
+  scheduled_drop    DATE,
+  send_date         DATE,
+  final_description TEXT,
+  event_type        VARCHAR(50),
+  quantity          INTEGER DEFAULT 0,
+  user_id           UUID REFERENCES users(id),
+  metadata          JSONB,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- ============================================================
