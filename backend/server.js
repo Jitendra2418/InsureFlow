@@ -1916,6 +1916,209 @@ app.delete('/api/policies/:id', authenticateToken, async (req, res) => {
   }
 });
 
+// =======================================================
+// BILLING ROUTES
+// =======================================================
+
+// Ensure payment_retry_queue table exists (idempotent)
+(async () => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS payment_retry_queue (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        premium_record_id UUID NOT NULL REFERENCES premium_records(id) ON DELETE CASCADE,
+        retry_number INT NOT NULL,
+        scheduled_at TIMESTAMPTZ NOT NULL,
+        attempted_at TIMESTAMPTZ,
+        result TEXT,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await pool.query(`ALTER TABLE premium_records ADD COLUMN IF NOT EXISTS payment_attempt_count INT DEFAULT 0`).catch(() => {});
+    await pool.query(`ALTER TABLE premium_records ADD COLUMN IF NOT EXISTS last_attempted_at TIMESTAMPTZ`).catch(() => {});
+  } catch (e) {
+    console.error('Billing table init error:', e.message);
+  }
+})();
+
+// GET /api/admin/billing — list all premium records with full customer + policy info
+app.get('/api/admin/billing', authenticateToken, authorizeStaff, async (req, res) => {
+  const { status, search } = req.query;
+  try {
+    let query = `
+      SELECT
+        pr.id,
+        pr.billing_month AS "billingMonth",
+        pr.amount,
+        pr.status,
+        pr.retry_count AS "retryCount",
+        pr.due_date AS "dueDate",
+        pr.paid_at AS "paidAt",
+        pr.created_at AS "createdAt",
+        p.id AS "policyId",
+        p.policy_number AS "policyNumber",
+        p.cover_amount AS "coverAmount",
+        p.monthly_premium AS "monthlyPremium",
+        p.effective_date AS "effectiveDate",
+        p.address_line1 AS "addressLine1",
+        p.address_line2 AS "addressLine2",
+        p.city,
+        p.state,
+        p.zip_code AS "zipCode",
+        u.id AS "userId",
+        u.first_name AS "firstName",
+        u.last_name AS "lastName",
+        CONCAT(u.first_name, ' ', u.last_name) AS "customerName",
+        u.email AS "customerEmail",
+        u.phone AS "customerPhone",
+        pr2.name AS "productName",
+        COALESCE(
+          (SELECT json_agg(json_build_object(
+            'id', rq.id,
+            'retryNumber', rq.retry_number,
+            'scheduledAt', rq.scheduled_at,
+            'attemptedAt', rq.attempted_at,
+            'result', rq.result
+          ) ORDER BY rq.retry_number)
+          FROM payment_retry_queue rq
+          WHERE rq.premium_record_id = pr.id),
+          '[]'::json
+        ) AS "retryHistory"
+      FROM premium_records pr
+      JOIN policies p ON pr.policy_id = p.id
+      JOIN users u ON p.user_id = u.id
+      JOIN products pr2 ON p.product_id = pr2.id
+    `;
+
+    const params = [];
+    const conditions = [];
+
+    if (status && status !== 'ALL') {
+      params.push(status);
+      conditions.push(`pr.status = $${params.length}::text`);
+    }
+    if (search && search.trim()) {
+      params.push(`%${search.trim().toLowerCase()}%`);
+      conditions.push(`(LOWER(CONCAT(u.first_name, ' ', u.last_name)) LIKE $${params.length} OR LOWER(p.policy_number) LIKE $${params.length} OR LOWER(u.email) LIKE $${params.length})`);
+    }
+
+    if (conditions.length > 0) query += ' WHERE ' + conditions.join(' AND ');
+    query += ' ORDER BY pr.billing_month DESC, pr.created_at DESC';
+
+    const result = await pool.query(query, params);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching billing records:', err);
+    res.status(500).json({ error: 'Database error: ' + err.message });
+  }
+});
+
+// GET /api/admin/billing/stats — summary counts by status
+app.get('/api/admin/billing/stats', authenticateToken, authorizeStaff, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT
+        COUNT(*) FILTER (WHERE status = 'PAID') AS paid,
+        COUNT(*) FILTER (WHERE status = 'PENDING') AS pending,
+        COUNT(*) FILTER (WHERE status = 'FAILED') AS failed,
+        COUNT(*) FILTER (WHERE status = 'RETRY_SCHEDULED') AS retry_scheduled,
+        COALESCE(SUM(amount) FILTER (WHERE status = 'PAID'), 0) AS total_collected,
+        COALESCE(SUM(amount) FILTER (WHERE status IN ('PENDING','RETRY_SCHEDULED','FAILED')), 0) AS total_outstanding,
+        COUNT(DISTINCT policy_id) AS total_policies
+      FROM premium_records
+    `);
+    const row = result.rows[0];
+    res.json({
+      paid: parseInt(row.paid, 10),
+      pending: parseInt(row.pending, 10),
+      failed: parseInt(row.failed, 10),
+      retryScheduled: parseInt(row.retry_scheduled, 10),
+      totalCollected: parseFloat(row.total_collected),
+      totalOutstanding: parseFloat(row.total_outstanding),
+      totalPolicies: parseInt(row.total_policies, 10),
+    });
+  } catch (err) {
+    console.error('Error fetching billing stats:', err);
+    res.status(500).json({ error: 'Database error: ' + err.message });
+  }
+});
+
+// POST /api/admin/billing/trigger — manually trigger billing run (admin tool)
+app.post('/api/admin/billing/trigger', authenticateToken, authorizeStaff, async (req, res) => {
+  try {
+    const { generateMonthlyPremiumRecords, processPendingCharges } = require('./services/billingService');
+    const genResult = await generateMonthlyPremiumRecords(new Date());
+    const chargeResult = await processPendingCharges();
+    res.json({
+      message: 'Billing run triggered successfully.',
+      generated: genResult,
+      charged: chargeResult,
+    });
+  } catch (err) {
+    console.error('Error triggering billing run:', err);
+    res.status(500).json({ error: 'Billing trigger error: ' + err.message });
+  }
+});
+
+// POST /api/admin/billing/retry — manually trigger retry processing
+app.post('/api/admin/billing/retry', authenticateToken, authorizeStaff, async (req, res) => {
+  try {
+    const { processDueRetries } = require('./services/billingService');
+    const retryResult = await processDueRetries();
+    res.json({
+      message: 'Retry job triggered successfully.',
+      result: retryResult,
+    });
+  } catch (err) {
+    console.error('Error triggering retry run:', err);
+    res.status(500).json({ error: 'Retry trigger error: ' + err.message });
+  }
+});
+
+// POST /api/admin/billing/:id/send-reminder — mock send payment reminder email
+app.post('/api/admin/billing/:id/send-reminder', authenticateToken, authorizeStaff, async (req, res) => {
+  const { id } = req.params;
+  try {
+    const result = await pool.query(`
+      SELECT pr.id, pr.amount, pr.billing_month, pr.status,
+             p.policy_number, u.email, u.first_name, u.last_name
+      FROM premium_records pr
+      JOIN policies p ON pr.policy_id = p.id
+      JOIN users u ON p.user_id = u.id
+      WHERE pr.id = $1::uuid
+    `, [id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Billing record not found.' });
+    }
+
+    const record = result.rows[0];
+    const billingMonth = new Date(record.billing_month).toLocaleString('default', { month: 'long', year: 'numeric' });
+
+    // Mock email (in production: integrate Nodemailer / SendGrid / SES)
+    console.log(`\n📧 [Mock Email] Payment reminder sent to ${record.email}`);
+    console.log(`   Policy: ${record.policy_number}`);
+    console.log(`   Amount: $${record.amount}`);
+    console.log(`   Month:  ${billingMonth}`);
+    console.log(`   Status: ${record.status}\n`);
+
+    res.json({
+      message: `Payment reminder email sent to ${record.email}`,
+      recipient: {
+        name: `${record.first_name} ${record.last_name}`,
+        email: record.email,
+      },
+      policyNumber: record.policy_number,
+      amount: parseFloat(record.amount),
+      billingMonth,
+      sentAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error('Error sending reminder:', err);
+    res.status(500).json({ error: 'Database error: ' + err.message });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`=======================================================`);
   console.log(`🚀 InsureFlow Backend API running on http://localhost:${PORT}`);

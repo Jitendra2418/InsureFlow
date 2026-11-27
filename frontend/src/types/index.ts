@@ -154,6 +154,55 @@ export interface ClaimDocument {
 
 export type ClaimStatus = 'SUBMITTED' | 'UNDER_REVIEW' | 'APPROVED' | 'REJECTED';
 
+export type PremiumStatus = 'PENDING' | 'PAID' | 'FAILED' | 'RETRY_SCHEDULED';
+
+export interface RetryHistory {
+  id: string;
+  retryNumber: number;
+  scheduledAt: string;
+  attemptedAt?: string;
+  result?: string;
+}
+
+export interface PremiumRecord {
+  id: string;
+  billingMonth: string;
+  amount: number | string;
+  status: PremiumStatus;
+  retryCount: number;
+  dueDate?: string;
+  paidAt?: string;
+  createdAt: string;
+  policyId: string;
+  policyNumber: string;
+  coverAmount: number | string;
+  monthlyPremium: number | string;
+  effectiveDate: string;
+  addressLine1: string;
+  addressLine2?: string;
+  city: string;
+  state: string;
+  zipCode: string;
+  userId: string;
+  firstName: string;
+  lastName: string;
+  customerName: string;
+  customerEmail: string;
+  customerPhone?: string;
+  productName: string;
+  retryHistory: RetryHistory[];
+}
+
+export interface BillingStats {
+  paid: number;
+  pending: number;
+  failed: number;
+  retryScheduled: number;
+  totalCollected: number;
+  totalOutstanding: number;
+  totalPolicies: number;
+}
+
 export interface Claim {
   id: string;
   claimNumber: string;

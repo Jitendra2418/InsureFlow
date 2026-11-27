@@ -1,14 +1,15 @@
-﻿import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Client, Product, Campaign, CampaignEvent, Segment, CustomerStats, Claim, ClaimStatus } from '../types';
+import { Client, Product, Campaign, CampaignEvent, Segment, CustomerStats, Claim, ClaimStatus, PremiumRecord, BillingStats } from '../types';
 import { apiRequest } from '../api';
 import { 
   Building2, Megaphone, ShieldCheck, PlusCircle, Search, RefreshCw, 
   LogOut, CheckCircle2, AlertCircle, MapPin, 
   Sparkles, Sliders, Hash, Pencil, Trash2, X, AlertTriangle,
   Calendar, CalendarDays, Send, ArrowRight, Layers, Target, Users,
-  ClipboardList, FileText, Download, Check, Clock, XCircle, Eye
+  ClipboardList, FileText, Download, Check, Clock, XCircle, Eye,
+  CreditCard, Mail, RotateCcw, Banknote
 } from 'lucide-react';
 
 const US_STATES = [
@@ -26,8 +27,8 @@ export const AdminDashboard: React.FC = () => {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
 
-  // Active top-level tab: 'clients' | 'campaigns' | 'events' | 'segments' | 'claims'
-  const [activeTab, setActiveTab] = useState<'clients' | 'campaigns' | 'events' | 'segments' | 'claims'>('clients');
+  // Active top-level tab: 'clients' | 'campaigns' | 'events' | 'segments' | 'claims' | 'billing'
+  const [activeTab, setActiveTab] = useState<'clients' | 'campaigns' | 'events' | 'segments' | 'claims' | 'billing'>('clients');
 
   // Helper to generate a random client ID
   const generateNewClientId = () => {
@@ -434,6 +435,80 @@ export const AdminDashboard: React.FC = () => {
   const [claimActionError, setClaimActionError] = useState<string>('');
   const [viewingDocumentsClaim, setViewingDocumentsClaim] = useState<Claim | null>(null);
 
+  // ── Billing tab state (INS-7) ───────────────────────────────────
+  const [billingRecords, setBillingRecords] = useState<PremiumRecord[]>([]);
+  const [billingStats, setBillingStats] = useState<BillingStats | null>(null);
+  const [isBillingLoading, setIsBillingLoading] = useState<boolean>(false);
+  const [billingStatusFilter, setBillingStatusFilter] = useState<string>('ALL');
+  const [billingSearchTerm, setBillingSearchTerm] = useState<string>('');
+  const [selectedBillingRecord, setSelectedBillingRecord] = useState<PremiumRecord | null>(null);
+  const [billingActionSuccess, setBillingActionSuccess] = useState<string>('');
+  const [billingActionError, setBillingActionError] = useState<string>('');
+  const [isSendingReminder, setIsSendingReminder] = useState<string | null>(null);
+  const [isTriggeringBilling, setIsTriggeringBilling] = useState<boolean>(false);
+
+  const loadBilling = async (status?: string, search?: string) => {
+    setIsBillingLoading(true);
+    setBillingActionError('');
+    try {
+      const activeStatus = status !== undefined ? status : billingStatusFilter;
+      const activeSearch = search !== undefined ? search : billingSearchTerm;
+      let url = '/admin/billing';
+      const params: string[] = [];
+      if (activeStatus && activeStatus !== 'ALL') params.push(`status=${activeStatus}`);
+      if (activeSearch.trim()) params.push(`search=${encodeURIComponent(activeSearch.trim())}`);
+      if (params.length > 0) url += '?' + params.join('&');
+      const [data, stats] = await Promise.all([
+        apiRequest<PremiumRecord[]>(url),
+        apiRequest<BillingStats>('/admin/billing/stats'),
+      ]);
+      setBillingRecords(data);
+      setBillingStats(stats);
+    } catch (err) {
+      console.error('Failed to load billing records:', err);
+      setBillingActionError('Failed to load billing records.');
+    } finally {
+      setIsBillingLoading(false);
+    }
+  };
+
+  const handleSendReminder = async (recordId: string) => {
+    setIsSendingReminder(recordId);
+    setBillingActionSuccess('');
+    setBillingActionError('');
+    try {
+      const res = await apiRequest<{ message: string; recipient: { name: string; email: string }; sentAt: string }>(
+        `/admin/billing/${recordId}/send-reminder`,
+        { method: 'POST' }
+      );
+      setBillingActionSuccess(`📧 Reminder sent to ${res.recipient.name} (${res.recipient.email})`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to send reminder.';
+      setBillingActionError(msg);
+    } finally {
+      setIsSendingReminder(null);
+    }
+  };
+
+  const handleTriggerBilling = async () => {
+    setIsTriggeringBilling(true);
+    setBillingActionSuccess('');
+    setBillingActionError('');
+    try {
+      const res = await apiRequest<{ message: string; generated: { created: number }; charged: { paid: number; failed: number } }>(
+        '/admin/billing/trigger',
+        { method: 'POST' }
+      );
+      setBillingActionSuccess(`✅ ${res.message} — Generated: ${res.generated.created} records | Paid: ${res.charged.paid} | Failed: ${res.charged.failed}`);
+      await loadBilling();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to trigger billing.';
+      setBillingActionError(msg);
+    } finally {
+      setIsTriggeringBilling(false);
+    }
+  };
+
   // Load claims from backend
   const loadClaims = async (status?: string) => {
     setIsClaimsLoading(true);
@@ -536,6 +611,8 @@ export const AdminDashboard: React.FC = () => {
       loadCustomerStats();
     } else if (activeTab === 'claims') {
       loadClaims();
+    } else if (activeTab === 'billing') {
+      loadBilling();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
@@ -856,6 +933,23 @@ export const AdminDashboard: React.FC = () => {
               activeTab === 'claims' ? 'bg-white/20 text-white' : 'bg-[#D8CBB9] text-stone-700'
             }`}>
               {claims.length}
+            </span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('billing')}
+            className={`inline-flex items-center space-x-2.5 px-6 py-3 rounded-2xl text-sm font-bold transition-all ${
+              activeTab === 'billing'
+                ? 'bg-[#5A6644] text-white shadow-md shadow-[#5A6644]/25 scale-[1.01]'
+                : 'bg-[#EAE2D6] text-stone-700 hover:bg-[#ded4c6] hover:text-stone-900 border border-[#D8CBB9]'
+            }`}
+          >
+            <CreditCard className="w-4 h-4" />
+            <span>Billing</span>
+            <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${
+              activeTab === 'billing' ? 'bg-white/20 text-white' : 'bg-[#D8CBB9] text-stone-700'
+            }`}>
+              {billingRecords.length}
             </span>
           </button>
         </div>
@@ -3321,6 +3415,624 @@ export const AdminDashboard: React.FC = () => {
           </div>
         </div>
       )}
+        {/* TAB 6: BILLING (INS-7) */}
+        {activeTab === 'billing' && (
+          <div className="space-y-6 animate-in fade-in duration-200">
+            {/* Header & Status Filter Banner */}
+            <div className="bg-gradient-to-r from-[#5A6644] to-[#454f34] rounded-3xl p-6 sm:p-7 text-white shadow-md border border-[#5A6644]">
+              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                <div>
+                  <div className="flex items-center space-x-2 text-[#D8E2C8] text-xs font-bold uppercase tracking-wider mb-1">
+                    <CreditCard className="w-4 h-4" />
+                    <span>Monthly Billing & Lifecycle</span>
+                  </div>
+                  <h2 className="text-xl sm:text-2xl font-black tracking-tight">
+                    Billing Lifecycle & Payment Tracking
+                  </h2>
+                  <p className="text-xs text-[#D8E2C8] mt-1 max-w-2xl">
+                    Generate monthly premium records for active policies, monitor payment gateway charges, manage retry queues on Day 3, 7, and 14, and send direct customer reminders.
+                  </p>
+                </div>
+
+                <div className="flex items-center space-x-3">
+                  <div className="bg-white/10 backdrop-blur-md px-4 py-2.5 rounded-2xl border border-white/20 text-right">
+                    <p className="text-[10px] uppercase font-bold text-[#D8E2C8]">Total Records</p>
+                    <p className="text-xl font-extrabold text-white">{billingRecords.length}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleTriggerBilling}
+                    disabled={isTriggeringBilling}
+                    className="inline-flex items-center space-x-1.5 px-3.5 py-2.5 bg-white/15 hover:bg-white/25 border border-white/30 text-white rounded-2xl text-xs font-bold transition shadow-sm backdrop-blur-md disabled:opacity-50"
+                  >
+                    <Banknote className="w-4 h-4" />
+                    <span>{isTriggeringBilling ? 'Running...' : 'Run Billing Now'}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Billing Metric Summary Cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              <div 
+                onClick={() => { setBillingStatusFilter('PAID'); loadBilling('PAID', billingSearchTerm); }}
+                className={`p-4 rounded-2xl border transition cursor-pointer ${
+                  billingStatusFilter === 'PAID' 
+                    ? 'bg-emerald-100/80 border-emerald-400 ring-2 ring-emerald-500/20' 
+                    : 'bg-[#EAE2D6] border-[#D8CBB9] hover:bg-[#ded4c6]'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-900">Paid</span>
+                  <Check className="w-4 h-4 text-emerald-600" />
+                </div>
+                <p className="text-2xl font-black text-emerald-950 mt-1">
+                  {billingStats ? billingStats.paid : billingRecords.filter(r => r.status === 'PAID').length}
+                </p>
+                <p className="text-[10px] text-emerald-800 mt-0.5">
+                  ${billingStats ? billingStats.totalCollected.toFixed(2) : '0.00'} collected
+                </p>
+              </div>
+
+              <div 
+                onClick={() => { setBillingStatusFilter('PENDING'); loadBilling('PENDING', billingSearchTerm); }}
+                className={`p-4 rounded-2xl border transition cursor-pointer ${
+                  billingStatusFilter === 'PENDING' 
+                    ? 'bg-amber-100/80 border-amber-400 ring-2 ring-amber-500/20' 
+                    : 'bg-[#EAE2D6] border-[#D8CBB9] hover:bg-[#ded4c6]'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-amber-900">Pending</span>
+                  <Clock className="w-4 h-4 text-amber-600" />
+                </div>
+                <p className="text-2xl font-black text-amber-950 mt-1">
+                  {billingStats ? billingStats.pending : billingRecords.filter(r => r.status === 'PENDING').length}
+                </p>
+                <p className="text-[10px] text-amber-800 mt-0.5">Awaiting gateway charge</p>
+              </div>
+
+              <div 
+                onClick={() => { setBillingStatusFilter('RETRY_SCHEDULED'); loadBilling('RETRY_SCHEDULED', billingSearchTerm); }}
+                className={`p-4 rounded-2xl border transition cursor-pointer ${
+                  billingStatusFilter === 'RETRY_SCHEDULED' 
+                    ? 'bg-orange-100/80 border-orange-400 ring-2 ring-orange-500/20' 
+                    : 'bg-[#EAE2D6] border-[#D8CBB9] hover:bg-[#ded4c6]'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-orange-900">Retry Queue</span>
+                  <RotateCcw className="w-4 h-4 text-orange-600" />
+                </div>
+                <p className="text-2xl font-black text-orange-950 mt-1">
+                  {billingStats ? billingStats.retryScheduled : billingRecords.filter(r => r.status === 'RETRY_SCHEDULED').length}
+                </p>
+                <p className="text-[10px] text-orange-800 mt-0.5">Flagged for automated retry</p>
+              </div>
+
+              <div 
+                onClick={() => { setBillingStatusFilter('FAILED'); loadBilling('FAILED', billingSearchTerm); }}
+                className={`p-4 rounded-2xl border transition cursor-pointer ${
+                  billingStatusFilter === 'FAILED' 
+                    ? 'bg-red-100/80 border-red-400 ring-2 ring-red-500/20' 
+                    : 'bg-[#EAE2D6] border-[#D8CBB9] hover:bg-[#ded4c6]'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-red-900">Failed</span>
+                  <XCircle className="w-4 h-4 text-red-600" />
+                </div>
+                <p className="text-2xl font-black text-red-950 mt-1">
+                  {billingStats ? billingStats.failed : billingRecords.filter(r => r.status === 'FAILED').length}
+                </p>
+                <p className="text-[10px] text-red-800 mt-0.5">
+                  ${billingStats ? billingStats.totalOutstanding.toFixed(2) : '0.00'} outstanding
+                </p>
+              </div>
+            </div>
+
+            {/* Action Feedback Alerts */}
+            {billingActionError && (
+              <div className="p-4 bg-red-50 border border-red-200 text-red-700 text-xs rounded-2xl flex items-center justify-between space-x-2.5">
+                <div className="flex items-center space-x-2.5">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0 text-red-500" />
+                  <span>{billingActionError}</span>
+                </div>
+                <button onClick={() => setBillingActionError('')} className="text-red-400 hover:text-red-700">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+            {billingActionSuccess && (
+              <div className="p-4 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs rounded-2xl flex items-center justify-between space-x-2.5">
+                <div className="flex items-center space-x-2.5">
+                  <CheckCircle2 className="w-4 h-4 flex-shrink-0 text-emerald-600" />
+                  <span>{billingActionSuccess}</span>
+                </div>
+                <button onClick={() => setBillingActionSuccess('')} className="text-emerald-500 hover:text-emerald-700">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+
+            {/* Billing Table Container */}
+            <div className="bg-[#EAE2D6] border border-[#D8CBB9] rounded-3xl p-6 sm:p-8 shadow-sm space-y-5">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-4 border-b border-[#D8CBB9]/80">
+                <div>
+                  <h3 className="text-lg font-bold text-[#2E3523] flex items-center space-x-2">
+                    <CreditCard className="w-5 h-5 text-[#5A6644]" />
+                    <span>Premium Records Registry</span>
+                  </h3>
+                  <p className="text-xs text-stone-600 mt-0.5">
+                    Track policyholder payments, see due amounts, review scheduled retries, and dispatch payment notifications.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2.5 w-full sm:w-auto">
+                  {/* Status Filter Tabs */}
+                  <div className="flex rounded-xl bg-white border border-[#D8CBB9] p-0.5 text-xs font-bold">
+                    {[
+                      { key: 'ALL', label: 'All' },
+                      { key: 'PAID', label: 'Paid' },
+                      { key: 'PENDING', label: 'Pending' },
+                      { key: 'RETRY_SCHEDULED', label: 'Retry' },
+                      { key: 'FAILED', label: 'Failed' },
+                    ].map((st) => (
+                      <button
+                        key={st.key}
+                        type="button"
+                        onClick={() => { setBillingStatusFilter(st.key); loadBilling(st.key, billingSearchTerm); }}
+                        className={`px-2.5 py-1.5 rounded-lg transition text-[11px] ${
+                          billingStatusFilter === st.key 
+                            ? 'bg-[#5A6644] text-white shadow-sm' 
+                            : 'text-stone-600 hover:text-stone-900'
+                        }`}
+                      >
+                        {st.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Search Bar */}
+                  <div className="relative flex-1 sm:w-64">
+                    <Search className="w-3.5 h-3.5 text-stone-400 absolute left-3 top-3" />
+                    <input
+                      type="text"
+                      placeholder="Search customer, policy, email..."
+                      value={billingSearchTerm}
+                      onChange={(e) => {
+                        setBillingSearchTerm(e.target.value);
+                        loadBilling(billingStatusFilter, e.target.value);
+                      }}
+                      className="w-full pl-9 pr-3 py-2 bg-white border border-[#D8CBB9] rounded-xl text-xs text-stone-900 placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-[#8B9A6E]"
+                    />
+                  </div>
+
+                  <button
+                    onClick={() => loadBilling()}
+                    disabled={isBillingLoading}
+                    title="Refresh Billing Records"
+                    className="p-2 bg-white border border-[#D8CBB9] rounded-xl text-stone-600 hover:text-[#5A6644] hover:bg-stone-50 transition"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${isBillingLoading ? 'animate-spin' : ''}`} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Table */}
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="border-b border-[#D8CBB9] text-[11px] font-bold uppercase tracking-wider text-stone-600">
+                      <th className="py-3 px-4">Billing Month</th>
+                      <th className="py-3 px-4">Policy #</th>
+                      <th className="py-3 px-4">Insured Person</th>
+                      <th className="py-3 px-4">Product</th>
+                      <th className="py-3 px-4">Premium Amount</th>
+                      <th className="py-3 px-4">Due Date</th>
+                      <th className="py-3 px-4 text-center">Status</th>
+                      <th className="py-3 px-4 text-center">Retries</th>
+                      <th className="py-3 px-4 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#D8CBB9]/60 text-xs text-stone-800">
+                    {isBillingLoading ? (
+                      <tr>
+                        <td colSpan={9} className="py-8 text-center text-stone-500">
+                          <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-[#5A6644]" />
+                          Loading billing records from database...
+                        </td>
+                      </tr>
+                    ) : billingRecords.length === 0 ? (
+                      <tr>
+                        <td colSpan={9} className="py-8 text-center text-stone-500">
+                          {billingSearchTerm 
+                            ? 'No billing records match your search query.' 
+                            : billingStatusFilter !== 'ALL'
+                              ? `No records found with status "${billingStatusFilter}".`
+                              : 'No billing records recorded in the database yet. Click "Run Billing Now" to generate records.'}
+                        </td>
+                      </tr>
+                    ) : (
+                      billingRecords.map((record) => {
+                        const statusBadges: Record<string, { bg: string; text: string; border: string }> = {
+                          PAID: { bg: 'bg-emerald-100', text: 'text-emerald-800', border: 'border-emerald-300' },
+                          PENDING: { bg: 'bg-amber-100', text: 'text-amber-800', border: 'border-amber-300' },
+                          RETRY_SCHEDULED: { bg: 'bg-orange-100', text: 'text-orange-800', border: 'border-orange-300' },
+                          FAILED: { bg: 'bg-red-100', text: 'text-red-800', border: 'border-red-300' },
+                        };
+                        const badge = statusBadges[record.status] || { bg: 'bg-stone-100', text: 'text-stone-700', border: 'border-stone-300' };
+
+                        return (
+                          <tr key={record.id} className="hover:bg-white/40 transition">
+                            {/* Billing Month */}
+                            <td className="py-3.5 px-4 font-mono text-stone-700 whitespace-nowrap">
+                              <div className="font-bold">
+                                {new Date(record.billingMonth).toLocaleDateString('en-US', {
+                                  year: 'numeric',
+                                  month: 'short'
+                                })}
+                              </div>
+                              <div className="text-[10px] text-stone-400">
+                                {record.paidAt ? (
+                                  <span className="text-emerald-700 font-semibold">Paid {new Date(record.paidAt).toLocaleDateString()}</span>
+                                ) : (
+                                  <span>Unpaid</span>
+                                )}
+                              </div>
+                            </td>
+
+                            {/* Policy # */}
+                            <td className="py-3.5 px-4 font-mono font-bold text-stone-700 whitespace-nowrap">
+                              <span className="bg-white/90 border border-[#D8CBB9] px-2 py-0.5 rounded-md">
+                                {record.policyNumber}
+                              </span>
+                            </td>
+
+                            {/* Insured Person */}
+                            <td className="py-3.5 px-4 font-bold text-[#2E3523]">
+                              <div>{record.customerName}</div>
+                              <div className="text-[11px] font-normal text-stone-500">
+                                {record.customerEmail}
+                              </div>
+                              <div className="text-[10px] font-mono text-stone-400 truncate max-w-[200px]" title={`${record.addressLine1}, ${record.city}, ${record.state} ${record.zipCode}`}>
+                                {record.city}, {record.state}
+                              </div>
+                            </td>
+
+                            {/* Product */}
+                            <td className="py-3.5 px-4">
+                              <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-[#8B9A6E]/15 text-[#3D472E] border border-[#8B9A6E]/30">
+                                {record.productName}
+                              </span>
+                              <div className="text-[10px] text-stone-400 mt-0.5">
+                                Cover: ${parseFloat(String(record.coverAmount)).toLocaleString()}
+                              </div>
+                            </td>
+
+                            {/* Premium Amount */}
+                            <td className="py-3.5 px-4 font-bold text-stone-900 whitespace-nowrap">
+                              <div>${parseFloat(String(record.amount)).toFixed(2)}</div>
+                              <div className="text-[10px] text-stone-400 font-normal">
+                                ${parseFloat(String(record.monthlyPremium)).toFixed(2)}/mo
+                              </div>
+                            </td>
+
+                            {/* Due Date */}
+                            <td className="py-3.5 px-4 font-mono text-stone-700 whitespace-nowrap">
+                              <div>
+                                {record.dueDate ? new Date(record.dueDate).toLocaleDateString('en-US', {
+                                  year: 'numeric',
+                                  month: 'short',
+                                  day: 'numeric'
+                                }) : '—'}
+                              </div>
+                            </td>
+
+                            {/* Status */}
+                            <td className="py-3.5 px-4 text-center">
+                              <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold border ${badge.bg} ${badge.text} ${badge.border}`}>
+                                {record.status === 'RETRY_SCHEDULED' ? 'Retry Scheduled' :
+                                 record.status === 'PAID' ? 'Paid' :
+                                 record.status === 'FAILED' ? 'Failed' : 'Pending'}
+                              </span>
+                            </td>
+
+                            {/* Retries */}
+                            <td className="py-3.5 px-4 text-center">
+                              <div className={`font-bold ${record.retryCount > 0 ? 'text-orange-700' : 'text-stone-500'}`}>
+                                {record.retryCount} {record.retryCount === 1 ? 'attempt' : 'attempts'}
+                              </div>
+                              {record.retryHistory && record.retryHistory.length > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedBillingRecord(record)}
+                                  className="text-[10px] text-[#5A6644] underline font-semibold hover:text-[#2E3523] mt-0.5 block mx-auto"
+                                >
+                                  View history
+                                </button>
+                              )}
+                            </td>
+
+                            {/* Actions */}
+                            <td className="py-3.5 px-4 text-right">
+                              <div className="flex items-center justify-end space-x-1.5">
+                                {record.status !== 'PAID' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSendReminder(record.id)}
+                                    disabled={isSendingReminder === record.id}
+                                    className="px-2.5 py-1.5 rounded-lg bg-[#5A6644] hover:bg-[#495436] text-white text-[11px] font-bold transition shadow-xs flex items-center space-x-1 disabled:opacity-50"
+                                    title="Send payment reminder email"
+                                  >
+                                    <Mail className="w-3 h-3" />
+                                    <span>{isSendingReminder === record.id ? 'Sending...' : 'Remind'}</span>
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedBillingRecord(record)}
+                                  className="px-2 py-1 bg-white border border-[#D8CBB9] rounded-lg text-[11px] font-bold text-stone-700 hover:border-stone-400 hover:bg-stone-50 focus:outline-none transition inline-flex items-center space-x-1"
+                                  title="View billing record details"
+                                >
+                                  <Eye className="w-3.5 h-3.5 text-[#5A6644]" />
+                                  <span>Details</span>
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* BILLING DETAIL MODAL */}
+        {selectedBillingRecord && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
+            <div className="bg-[#EAE2D6] border border-[#D8CBB9] rounded-3xl p-6 sm:p-7 max-w-xl w-full shadow-2xl relative max-h-[90vh] overflow-y-auto">
+              <button
+                onClick={() => setSelectedBillingRecord(null)}
+                className="absolute top-4 right-4 p-2 text-stone-500 hover:text-stone-900 hover:bg-[#D8CBB9] rounded-xl transition"
+              >
+                <X className="w-4 h-4" />
+              </button>
+
+              <div className="flex items-center space-x-3 mb-5">
+                <div className="w-10 h-10 rounded-xl bg-[#8B9A6E] flex items-center justify-center text-white shadow-sm">
+                  <CreditCard className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-[#2E3523]">Billing Record Details</h3>
+                  <p className="text-xs text-stone-600">
+                    Policy {selectedBillingRecord.policyNumber} &bull; {new Date(selectedBillingRecord.billingMonth).toLocaleString('default', { month: 'long', year: 'numeric' })}
+                  </p>
+                </div>
+              </div>
+
+              {/* Customer Info */}
+              <div className="bg-white/80 rounded-2xl p-4 mb-4 border border-[#D8CBB9] space-y-2">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-[#5A6644] mb-2 flex items-center space-x-1.5">
+                  <Users className="w-3.5 h-3.5" />
+                  <span>Customer Information</span>
+                </h4>
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div><span className="text-stone-500">Name</span><p className="font-bold text-stone-900">{selectedBillingRecord.customerName}</p></div>
+                  <div><span className="text-stone-500">Email</span><p className="font-semibold text-stone-800">{selectedBillingRecord.customerEmail}</p></div>
+                  <div><span className="text-stone-500">Phone</span><p className="font-semibold text-stone-800">{selectedBillingRecord.customerPhone || '—'}</p></div>
+                  <div><span className="text-stone-500">Product</span><p className="font-semibold text-stone-800">{selectedBillingRecord.productName}</p></div>
+                  <div className="col-span-2">
+                    <span className="text-stone-500">Address</span>
+                    <p className="font-semibold text-stone-800">
+                      {selectedBillingRecord.addressLine1}{selectedBillingRecord.addressLine2 ? `, ${selectedBillingRecord.addressLine2}` : ''}, {selectedBillingRecord.city}, {selectedBillingRecord.state} {selectedBillingRecord.zipCode}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Payment Info */}
+              <div className="bg-white/80 rounded-2xl p-4 mb-4 border border-[#D8CBB9] space-y-2">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-[#5A6644] mb-2 flex items-center space-x-1.5">
+                  <Banknote className="w-3.5 h-3.5" />
+                  <span>Payment &amp; Coverage Summary</span>
+                </h4>
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div><span className="text-stone-500">Amount Due</span><p className="font-extrabold text-[#2E3523] text-base">${parseFloat(String(selectedBillingRecord.amount)).toFixed(2)}</p></div>
+                  <div>
+                    <span className="text-stone-500">Status</span>
+                    <div>
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border mt-0.5 ${
+                        selectedBillingRecord.status === 'PAID' ? 'bg-emerald-100 text-emerald-800 border-emerald-300' :
+                        selectedBillingRecord.status === 'FAILED' ? 'bg-red-100 text-red-800 border-red-300' :
+                        selectedBillingRecord.status === 'RETRY_SCHEDULED' ? 'bg-orange-100 text-orange-800 border-orange-300' :
+                        'bg-amber-100 text-amber-800 border-amber-300'
+                      }`}>
+                        {selectedBillingRecord.status}
+                      </span>
+                    </div>
+                  </div>
+                  <div><span className="text-stone-500">Due Date</span><p className="font-semibold text-stone-800">{selectedBillingRecord.dueDate ? new Date(selectedBillingRecord.dueDate).toLocaleDateString() : '—'}</p></div>
+                  <div><span className="text-stone-500">Paid At</span><p className="font-semibold text-stone-800">{selectedBillingRecord.paidAt ? new Date(selectedBillingRecord.paidAt).toLocaleString() : 'Not Paid Yet'}</p></div>
+                  <div><span className="text-stone-500">Monthly Premium</span><p className="font-bold text-stone-900">${parseFloat(String(selectedBillingRecord.monthlyPremium)).toFixed(2)}/mo</p></div>
+                  <div><span className="text-stone-500">Cover Amount</span><p className="font-bold text-stone-900">${parseFloat(String(selectedBillingRecord.coverAmount)).toLocaleString()}</p></div>
+                </div>
+              </div>
+
+              {/* Retry History */}
+              {selectedBillingRecord.retryHistory && selectedBillingRecord.retryHistory.length > 0 && (
+                <div className="bg-orange-50/90 border border-orange-200 rounded-2xl p-4 mb-4">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-orange-800 mb-3 flex items-center space-x-1.5">
+                    <RotateCcw className="w-3.5 h-3.5 text-orange-600" />
+                    <span>Payment Retry History ({selectedBillingRecord.retryHistory.length} attempts)</span>
+                  </h4>
+                  <div className="space-y-2">
+                    {selectedBillingRecord.retryHistory.map((r) => (
+                      <div key={r.id} className="bg-white rounded-xl p-3 border border-orange-200 text-xs shadow-xs">
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-orange-900">Attempt #{r.retryNumber}</span>
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${r.attemptedAt ? 'bg-stone-100 text-stone-600' : 'bg-orange-100 text-orange-800'}`}>
+                            {r.attemptedAt ? 'Attempted' : 'Scheduled'}
+                          </span>
+                        </div>
+                        <p className="text-stone-500 mt-1">Scheduled for: {new Date(r.scheduledAt).toLocaleString()}</p>
+                        {r.attemptedAt && <p className="text-stone-600 mt-0.5">Attempted at: {new Date(r.attemptedAt).toLocaleString()}</p>}
+                        {r.result && <p className="text-stone-800 mt-1 font-semibold">{r.result}</p>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Actions */}
+              <div className="flex justify-between items-center pt-4 border-t border-[#D8CBB9]">
+                <button
+                  type="button"
+                  onClick={() => setSelectedBillingRecord(null)}
+                  className="px-4 py-2 border border-[#D8CBB9] rounded-xl text-xs font-bold text-stone-700 bg-white hover:bg-stone-50 transition"
+                >
+                  Close
+                </button>
+                {selectedBillingRecord.status !== 'PAID' && (
+                  <button
+                    type="button"
+                    onClick={() => { handleSendReminder(selectedBillingRecord.id); setSelectedBillingRecord(null); }}
+                    disabled={isSendingReminder === selectedBillingRecord.id}
+                    className="inline-flex items-center space-x-1.5 px-4 py-2 bg-[#5A6644] hover:bg-[#495436] text-white rounded-xl text-xs font-bold transition shadow disabled:opacity-50"
+                  >
+                    <Mail className="w-3.5 h-3.5" />
+                    <span>Send Payment Reminder Email</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* BILLING DETAIL MODAL */}
+        {selectedBillingRecord && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
+            <div className="bg-[#EAE2D6] border border-[#D8CBB9] rounded-3xl p-6 sm:p-7 max-w-2xl w-full shadow-2xl relative max-h-[90vh] overflow-y-auto">
+              <button
+                onClick={() => setSelectedBillingRecord(null)}
+                className="absolute top-4 right-4 p-2 text-stone-500 hover:text-stone-900 hover:bg-[#D8CBB9] rounded-xl transition"
+              >
+                <X className="w-4 h-4" />
+              </button>
+
+              <div className="flex items-center space-x-3 mb-5">
+                <div className="w-10 h-10 rounded-xl bg-[#8B9A6E] flex items-center justify-center text-white shadow-sm">
+                  <CreditCard className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-[#2E3523]">Billing Record Details</h3>
+                  <p className="text-xs text-stone-600">
+                    Policy {selectedBillingRecord.policyNumber} &bull; {new Date(selectedBillingRecord.billingMonth).toLocaleString('default', { month: 'long', year: 'numeric' })}
+                  </p>
+                </div>
+              </div>
+
+              {/* Customer Info */}
+              <div className="bg-white/80 rounded-2xl p-4 mb-4 border border-[#D8CBB9] space-y-2">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-[#5A6644] mb-2 flex items-center space-x-1.5">
+                  <Users className="w-3.5 h-3.5" />
+                  <span>Customer Information</span>
+                </h4>
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div><span className="text-stone-500">Name</span><p className="font-bold text-stone-900">{selectedBillingRecord.customerName}</p></div>
+                  <div><span className="text-stone-500">Email</span><p className="font-semibold text-stone-800">{selectedBillingRecord.customerEmail}</p></div>
+                  <div><span className="text-stone-500">Phone</span><p className="font-semibold text-stone-800">{selectedBillingRecord.customerPhone || '—'}</p></div>
+                  <div><span className="text-stone-500">Product</span><p className="font-semibold text-stone-800">{selectedBillingRecord.productName}</p></div>
+                  <div className="col-span-2">
+                    <span className="text-stone-500">Address</span>
+                    <p className="font-semibold text-stone-800">
+                      {selectedBillingRecord.addressLine1}{selectedBillingRecord.addressLine2 ? `, ${selectedBillingRecord.addressLine2}` : ''}, {selectedBillingRecord.city}, {selectedBillingRecord.state} {selectedBillingRecord.zipCode}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Payment Info */}
+              <div className="bg-white/80 rounded-2xl p-4 mb-4 border border-[#D8CBB9] space-y-2">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-[#5A6644] mb-2 flex items-center space-x-1.5">
+                  <Banknote className="w-3.5 h-3.5" />
+                  <span>Payment &amp; Coverage Summary</span>
+                </h4>
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div><span className="text-stone-500">Amount Due</span><p className="font-extrabold text-[#2E3523] text-base">${parseFloat(String(selectedBillingRecord.amount)).toFixed(2)}</p></div>
+                  <div>
+                    <span className="text-stone-500">Status</span>
+                    <div>
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border mt-0.5 ${
+                        selectedBillingRecord.status === 'PAID' ? 'bg-emerald-100 text-emerald-800 border-emerald-300' :
+                        selectedBillingRecord.status === 'FAILED' ? 'bg-red-100 text-red-800 border-red-300' :
+                        selectedBillingRecord.status === 'RETRY_SCHEDULED' ? 'bg-orange-100 text-orange-800 border-orange-300' :
+                        'bg-amber-100 text-amber-800 border-amber-300'
+                      }`}>
+                        {selectedBillingRecord.status}
+                      </span>
+                    </div>
+                  </div>
+                  <div><span className="text-stone-500">Due Date</span><p className="font-semibold text-stone-800">{selectedBillingRecord.dueDate ? new Date(selectedBillingRecord.dueDate).toLocaleDateString() : '—'}</p></div>
+                  <div><span className="text-stone-500">Paid At</span><p className="font-semibold text-stone-800">{selectedBillingRecord.paidAt ? new Date(selectedBillingRecord.paidAt).toLocaleString() : 'Not Paid Yet'}</p></div>
+                  <div><span className="text-stone-500">Monthly Premium</span><p className="font-bold text-stone-900">${parseFloat(String(selectedBillingRecord.monthlyPremium)).toFixed(2)}/mo</p></div>
+                  <div><span className="text-stone-500">Cover Amount</span><p className="font-bold text-stone-900">${parseFloat(String(selectedBillingRecord.coverAmount)).toLocaleString()}</p></div>
+                </div>
+              </div>
+
+              {/* Retry History */}
+              {selectedBillingRecord.retryHistory && selectedBillingRecord.retryHistory.length > 0 && (
+                <div className="bg-orange-50/90 border border-orange-200 rounded-2xl p-4 mb-4">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-orange-800 mb-3 flex items-center space-x-1.5">
+                    <RotateCcw className="w-3.5 h-3.5 text-orange-600" />
+                    <span>Payment Retry History ({selectedBillingRecord.retryHistory.length} attempts)</span>
+                  </h4>
+                  <div className="space-y-2">
+                    {selectedBillingRecord.retryHistory.map((r) => (
+                      <div key={r.id} className="bg-white rounded-xl p-3 border border-orange-200 text-xs shadow-xs">
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-orange-900">Attempt #{r.retryNumber}</span>
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${r.attemptedAt ? 'bg-stone-100 text-stone-600' : 'bg-orange-100 text-orange-800'}`}>
+                            {r.attemptedAt ? 'Attempted' : 'Scheduled'}
+                          </span>
+                        </div>
+                        <p className="text-stone-500 mt-1">Scheduled for: {new Date(r.scheduledAt).toLocaleString()}</p>
+                        {r.attemptedAt && <p className="text-stone-600 mt-0.5">Attempted at: {new Date(r.attemptedAt).toLocaleString()}</p>}
+                        {r.result && <p className="text-stone-800 mt-1 font-semibold">{r.result}</p>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Actions */}
+              <div className="flex justify-between items-center pt-4 border-t border-[#D8CBB9]">
+                <button
+                  type="button"
+                  onClick={() => setSelectedBillingRecord(null)}
+                  className="px-4 py-2 border border-[#D8CBB9] rounded-xl text-xs font-bold text-stone-700 bg-white hover:bg-stone-50 transition"
+                >
+                  Close
+                </button>
+                {selectedBillingRecord.status !== 'PAID' && (
+                  <button
+                    type="button"
+                    onClick={() => { handleSendReminder(selectedBillingRecord.id); setSelectedBillingRecord(null); }}
+                    disabled={isSendingReminder === selectedBillingRecord.id}
+                    className="inline-flex items-center space-x-1.5 px-4 py-2 bg-[#8B9A6E] hover:bg-[#738258] text-white rounded-xl text-xs font-bold transition shadow disabled:opacity-50"
+                  >
+                    <Mail className="w-3.5 h-3.5" />
+                    <span>Send Payment Reminder Email</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
     </div>
   );
 };
