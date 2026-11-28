@@ -9,7 +9,7 @@ import {
   Sparkles, Sliders, Hash, Pencil, Trash2, X, AlertTriangle,
   Calendar, CalendarDays, Send, ArrowRight, Layers, Target, Users,
   ClipboardList, FileText, Download, Check, Clock, XCircle, Eye,
-  CreditCard, Mail, RotateCcw, Banknote
+  CreditCard, Mail, RotateCcw, Banknote, Printer
 } from 'lucide-react';
 
 const US_STATES = [
@@ -434,6 +434,8 @@ export const AdminDashboard: React.FC = () => {
   const [claimActionSuccess, setClaimActionSuccess] = useState<string>('');
   const [claimActionError, setClaimActionError] = useState<string>('');
   const [viewingDocumentsClaim, setViewingDocumentsClaim] = useState<Claim | null>(null);
+  const [selectedClaimInvoice, setSelectedClaimInvoice] = useState<Claim | null>(null);
+  const [isSendingClaimInvoice, setIsSendingClaimInvoice] = useState<string | null>(null);
 
   // ── Billing tab state (INS-7) ───────────────────────────────────
   const [billingRecords, setBillingRecords] = useState<PremiumRecord[]>([]);
@@ -442,9 +444,11 @@ export const AdminDashboard: React.FC = () => {
   const [billingStatusFilter, setBillingStatusFilter] = useState<string>('ALL');
   const [billingSearchTerm, setBillingSearchTerm] = useState<string>('');
   const [selectedBillingRecord, setSelectedBillingRecord] = useState<PremiumRecord | null>(null);
+  const [selectedInvoiceRecord, setSelectedInvoiceRecord] = useState<PremiumRecord | null>(null);
   const [billingActionSuccess, setBillingActionSuccess] = useState<string>('');
   const [billingActionError, setBillingActionError] = useState<string>('');
   const [isSendingReminder, setIsSendingReminder] = useState<string | null>(null);
+  const [isSendingInvoice, setIsSendingInvoice] = useState<string | null>(null);
   const [isTriggeringBilling, setIsTriggeringBilling] = useState<boolean>(false);
 
   const loadBilling = async (status?: string, search?: string) => {
@@ -487,6 +491,24 @@ export const AdminDashboard: React.FC = () => {
       setBillingActionError(msg);
     } finally {
       setIsSendingReminder(null);
+    }
+  };
+
+  const handleSendInvoice = async (recordId: string) => {
+    setIsSendingInvoice(recordId);
+    setBillingActionSuccess('');
+    setBillingActionError('');
+    try {
+      const res = await apiRequest<{ message: string; invoiceNumber: string; recipient: { name: string; email: string } }>(
+        `/admin/billing/${recordId}/send-invoice`,
+        { method: 'POST' }
+      );
+      setBillingActionSuccess(`🧾 Paid Invoice ${res.invoiceNumber} emailed successfully to ${res.recipient.name} (${res.recipient.email})`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to send invoice.';
+      setBillingActionError(msg);
+    } finally {
+      setIsSendingInvoice(null);
     }
   };
 
@@ -554,12 +576,16 @@ export const AdminDashboard: React.FC = () => {
     setClaimActionError('');
     setClaimActionSuccess('');
     try {
-      const body: { status: ClaimStatus; reviewerNotes?: string; approvedAmount?: number } = {
+      const body: { status: ClaimStatus; reviewerNotes?: string; approvedAmount?: number; claimedAmount?: number } = {
         status: reviewStatus,
         reviewerNotes: reviewerNotes.trim() || undefined
       };
-      if (reviewStatus === 'APPROVED' && approvedAmount) {
-        body.approvedAmount = parseFloat(approvedAmount);
+      if (approvedAmount && !isNaN(parseFloat(approvedAmount))) {
+        const num = parseFloat(approvedAmount);
+        body.claimedAmount = num;
+        if (reviewStatus === 'APPROVED') {
+          body.approvedAmount = num;
+        }
       }
 
       const res = await apiRequest<{ message: string; claim: Claim }>(`/admin/claims/${selectedClaimForReview.id}/status`, {
@@ -574,6 +600,24 @@ export const AdminDashboard: React.FC = () => {
       setClaimActionError(msg);
     } finally {
       setIsUpdatingClaim(false);
+    }
+  };
+
+  const handleSendClaimInvoice = async (claimId: string) => {
+    setIsSendingClaimInvoice(claimId);
+    setClaimActionSuccess('');
+    setClaimActionError('');
+    try {
+      const res = await apiRequest<{ message: string; invoiceNumber: string; recipient: { name: string; email: string } }>(
+        `/admin/claims/${claimId}/send-invoice`,
+        { method: 'POST' }
+      );
+      setClaimActionSuccess(`🧾 Claim Settlement Invoice ${res.invoiceNumber} emailed successfully to ${res.recipient.name} (${res.recipient.email})`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to send claim invoice.';
+      setClaimActionError(msg);
+    } finally {
+      setIsSendingClaimInvoice(null);
     }
   };
 
@@ -2941,10 +2985,13 @@ export const AdminDashboard: React.FC = () => {
 
                               {/* Claimed Amount */}
                               <td className="py-3.5 px-4 font-bold text-stone-900 whitespace-nowrap">
-                                <div>${parseFloat(claim.claimedAmount as string).toLocaleString()}</div>
-                                {claim.status === 'APPROVED' && claim.approvedAmount !== undefined && (
-                                  <div className="text-[10px] text-emerald-700 font-semibold">
-                                    Approved: ${parseFloat(claim.approvedAmount as string).toLocaleString()}
+                                <div>
+                                  ${parseFloat(String(claim.status === 'APPROVED' && claim.approvedAmount !== undefined && claim.approvedAmount !== null ? claim.approvedAmount : claim.claimedAmount)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </div>
+                                {claim.status === 'APPROVED' && (
+                                  <div className="text-[10px] text-emerald-700 font-semibold flex items-center space-x-1">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                                    <span>Approved: ${parseFloat(String(claim.approvedAmount || claim.claimedAmount)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                   </div>
                                 )}
                               </td>
@@ -2996,6 +3043,41 @@ export const AdminDashboard: React.FC = () => {
                                     <Sliders className="w-3 h-3" />
                                     <span>Manage</span>
                                   </button>
+
+                                  {/* Invoice & Mail Actions — only enabled/active when claim.status === 'APPROVED' */}
+                                  {claim.status === 'APPROVED' ? (
+                                    <>
+                                      <button
+                                        type="button"
+                                        onClick={() => setSelectedClaimInvoice(claim)}
+                                        className="px-2.5 py-1.5 rounded-lg bg-[#8B9A6E]/20 hover:bg-[#8B9A6E]/35 text-[#3D472E] border border-[#8B9A6E]/40 text-[11px] font-bold transition shadow-xs flex items-center space-x-1"
+                                        title="Generate and view approved claim settlement invoice"
+                                      >
+                                        <FileText className="w-3 h-3 text-[#5A6644]" />
+                                        <span>Invoice</span>
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleSendClaimInvoice(claim.id)}
+                                        disabled={isSendingClaimInvoice === claim.id}
+                                        className="px-2.5 py-1.5 rounded-lg bg-[#5A6644] hover:bg-[#495436] text-white text-[11px] font-bold transition shadow-xs flex items-center space-x-1 disabled:opacity-50"
+                                        title="Email official approved claim invoice to customer"
+                                      >
+                                        <Send className="w-3 h-3" />
+                                        <span>{isSendingClaimInvoice === claim.id ? 'Mailing...' : 'Mail Invoice'}</span>
+                                      </button>
+                                    </>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      disabled
+                                      className="px-2.5 py-1.5 rounded-lg bg-stone-100 text-stone-400 border border-stone-200 text-[11px] font-bold cursor-not-allowed flex items-center space-x-1"
+                                      title="Invoice can only be generated and mailed once approved by admin"
+                                    >
+                                      <FileText className="w-3 h-3 text-stone-300" />
+                                      <span>Invoice</span>
+                                    </button>
+                                  )}
 
                                   {/* Quick Status Dropdown Menu */}
                                   <select
@@ -3170,23 +3252,24 @@ export const AdminDashboard: React.FC = () => {
                       </div>
                     </div>
 
-                    {/* Approved Amount (Only if APPROVED) */}
-                    {reviewStatus === 'APPROVED' && (
-                      <div>
-                        <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1">
-                          Approved Payout Amount ($)
-                        </label>
-                        <input
-                          type="number"
-                          step="0.01"
-                          value={approvedAmount}
-                          onChange={(e) => setApprovedAmount(e.target.value)}
-                          placeholder="Enter approved amount"
-                          className="w-full px-3.5 py-2.5 bg-white border border-[#D8CBB9] rounded-xl text-xs text-stone-900 font-bold focus:ring-2 focus:ring-[#8B9A6E]"
-                          required
-                        />
-                      </div>
-                    )}
+                    {/* Amount Input */}
+                    <div>
+                      <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1">
+                        {reviewStatus === 'APPROVED' ? 'Approved Settlement Amount ($)' : 'Claim Amount ($)'}
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={approvedAmount}
+                        onChange={(e) => setApprovedAmount(e.target.value)}
+                        placeholder="Enter claim amount"
+                        className="w-full px-3.5 py-2.5 bg-white border border-[#D8CBB9] rounded-xl text-xs text-stone-900 font-bold focus:ring-2 focus:ring-[#8B9A6E]"
+                        required
+                      />
+                      <p className="text-[10px] text-stone-500 mt-1">
+                        Updates the claim amount in the registry and authorized settlement records.
+                      </p>
+                    </div>
 
                     {/* Reviewer Adjudication Notes */}
                     <div>
@@ -3201,6 +3284,41 @@ export const AdminDashboard: React.FC = () => {
                         className="w-full px-3.5 py-2.5 bg-white border border-[#D8CBB9] rounded-xl text-xs text-stone-900 focus:ring-2 focus:ring-[#8B9A6E]"
                       />
                     </div>
+
+                    {/* Quick invoice preview if already approved */}
+                    {selectedClaimForReview.status === 'APPROVED' && (
+                      <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs text-emerald-900">
+                        <div className="flex items-center space-x-2">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+                          <span>This claim is approved. Official settlement invoice is generated.</span>
+                        </div>
+                        <div className="flex items-center space-x-2 self-end sm:self-auto">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const c = selectedClaimForReview;
+                              setSelectedClaimForReview(null);
+                              setSelectedClaimInvoice(c);
+                            }}
+                            className="px-2.5 py-1 bg-white border border-emerald-300 rounded-lg text-emerald-800 font-bold hover:bg-emerald-100 transition flex items-center space-x-1"
+                          >
+                            <FileText className="w-3 h-3" />
+                            <span>View Invoice</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              handleSendClaimInvoice(selectedClaimForReview.id);
+                              setSelectedClaimForReview(null);
+                            }}
+                            className="px-2.5 py-1 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg font-bold transition flex items-center space-x-1"
+                          >
+                            <Send className="w-3 h-3" />
+                            <span>Mail Invoice</span>
+                          </button>
+                        </div>
+                      </div>
+                    )}
 
                     {/* Submit Actions */}
                     <div className="flex justify-end space-x-3 pt-3">
@@ -3230,6 +3348,217 @@ export const AdminDashboard: React.FC = () => {
                       </button>
                     </div>
                   </form>
+                </div>
+              </div>
+            )}
+
+            {/* APPROVED CLAIM SETTLEMENT INVOICE MODAL */}
+            {selectedClaimInvoice && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+                <div className="bg-white border border-stone-200 rounded-3xl p-6 sm:p-8 max-w-2xl w-full shadow-2xl relative max-h-[92vh] overflow-y-auto text-stone-800">
+                  {/* Close Button */}
+                  <button
+                    onClick={() => setSelectedClaimInvoice(null)}
+                    className="absolute top-4 right-4 p-2 text-stone-400 hover:text-stone-700 hover:bg-stone-100 rounded-xl transition print:hidden"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+
+                  {/* Invoice Header */}
+                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-6 border-b border-stone-200 gap-4">
+                    <div className="flex items-center space-x-3">
+                      <div className="w-11 h-11 rounded-2xl bg-[#5A6644] flex items-center justify-center text-white shadow-md">
+                        <ClipboardList className="w-6 h-6" />
+                      </div>
+                      <div>
+                        <h2 className="text-xl font-black text-[#2E3523] tracking-tight">Insure<span className="text-[#8B9A6E]">Flow</span></h2>
+                        <p className="text-[11px] text-stone-500 font-medium">Claims Adjudication &amp; Settlement Services</p>
+                      </div>
+                    </div>
+
+                    <div className="text-left sm:text-right">
+                      <span className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full text-xs font-black bg-emerald-100 text-emerald-800 border border-emerald-300">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>CLAIM APPROVED &amp; SETTLED</span>
+                      </span>
+                      <p className="text-xs font-mono font-bold text-stone-800 mt-1.5">
+                        INV-SETTLE-{selectedClaimInvoice.claimNumber.replace('CLM-', '')}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Invoice Metadata Row */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 py-4 border-b border-stone-100 text-xs">
+                    <div>
+                      <span className="text-stone-400 font-semibold block text-[10px] uppercase">Claim Number</span>
+                      <p className="font-mono font-bold text-stone-800 mt-0.5">{selectedClaimInvoice.claimNumber}</p>
+                    </div>
+                    <div>
+                      <span className="text-stone-400 font-semibold block text-[10px] uppercase">Incident Date</span>
+                      <p className="font-bold text-stone-800 mt-0.5">
+                        {new Date(selectedClaimInvoice.incidentDate).toLocaleDateString('default', { month: 'short', day: 'numeric', year: 'numeric' })}
+                      </p>
+                    </div>
+                    <div>
+                      <span className="text-stone-400 font-semibold block text-[10px] uppercase">Approval Date</span>
+                      <p className="font-bold text-emerald-700 mt-0.5">
+                        {selectedClaimInvoice.reviewedAt ? new Date(selectedClaimInvoice.reviewedAt).toLocaleDateString('default', { month: 'short', day: 'numeric', year: 'numeric' }) : 'Approved on Review'}
+                      </p>
+                    </div>
+                    <div>
+                      <span className="text-stone-400 font-semibold block text-[10px] uppercase">Adjudication Status</span>
+                      <p className="font-extrabold text-emerald-700 mt-0.5 flex items-center space-x-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                        <span>APPROVED</span>
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Billed By & Claimant Info */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 py-5 text-xs border-b border-stone-100">
+                    <div className="bg-stone-50 rounded-2xl p-4 border border-stone-200/80">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-[#5A6644] block mb-1.5">Claims Administrator (Payer)</span>
+                      <p className="font-bold text-stone-900">InsureFlow Claims Adjudication Bureau</p>
+                      <p className="text-stone-600 mt-0.5">100 Financial Way, Suite 400</p>
+                      <p className="text-stone-600">New York, NY 10005</p>
+                      <p className="text-stone-600 mt-1">claims@insureflow.com &bull; +1 (800) 555-FLOW</p>
+                    </div>
+
+                    <div className="bg-[#F4EFE6]/70 rounded-2xl p-4 border border-[#D8CBB9]/80">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-[#5A6644] block mb-1.5">Claimant / Policyholder</span>
+                      <p className="font-bold text-stone-900">{selectedClaimInvoice.insuredName}</p>
+                      <p className="text-stone-600 mt-0.5">{selectedClaimInvoice.insuredEmail}</p>
+                      <p className="text-stone-600">{selectedClaimInvoice.insuredPhone || 'Phone: Not specified'}</p>
+                      <p className="text-stone-600 mt-1">
+                        Policy #{selectedClaimInvoice.policyNumber} &bull; {selectedClaimInvoice.productName}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Itemized Claim Settlement Statement Table */}
+                  <div className="py-5">
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-stone-500 mb-3">Claim Adjudication &amp; Settlement Statement</h4>
+                    <div className="border border-stone-200 rounded-2xl overflow-hidden shadow-xs">
+                      <table className="w-full text-left text-xs">
+                        <thead className="bg-[#EAE2D6]/70 border-b border-[#D8CBB9] text-[11px] font-bold text-[#2E3523] uppercase">
+                          <tr>
+                            <th className="py-2.5 px-4">Coverage &amp; Incident</th>
+                            <th className="py-2.5 px-4 text-center">Incident Type</th>
+                            <th className="py-2.5 px-4 text-right">Claimed</th>
+                            <th className="py-2.5 px-4 text-right">Approved Settlement</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-stone-100">
+                          <tr>
+                            <td className="py-3 px-4">
+                              <p className="font-bold text-stone-900">{selectedClaimInvoice.productName}</p>
+                              <p className="text-[11px] text-stone-500 mt-0.5 max-w-sm">
+                                {selectedClaimInvoice.description || 'Verified incident under policy terms.'}
+                              </p>
+                            </td>
+                            <td className="py-3 px-4 text-center text-stone-700 font-semibold">
+                              <span className="px-2 py-0.5 bg-stone-100 rounded-lg text-[10px] uppercase font-bold text-stone-700">
+                                {selectedClaimInvoice.incidentType}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4 text-right font-medium text-stone-500 line-through">
+                              ${parseFloat(String(selectedClaimInvoice.claimedAmount)).toLocaleString()}
+                            </td>
+                            <td className="py-3 px-4 text-right font-extrabold text-emerald-800 text-sm">
+                              ${parseFloat(String(selectedClaimInvoice.approvedAmount || selectedClaimInvoice.claimedAmount)).toLocaleString()}
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Adjudication Notes & Settlement Breakdown */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
+                      <div className="bg-stone-50 rounded-2xl p-3.5 border border-stone-200 text-xs">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-stone-500 block mb-1">
+                          Adjudication Decision Notes
+                        </span>
+                        <p className="text-stone-700 italic">
+                          "{selectedClaimInvoice.reviewerNotes || 'Claim verified against policy documentation and approved in accordance with coverage guidelines.'}"
+                        </p>
+                      </div>
+
+                      <div className="space-y-2 text-xs">
+                        <div className="flex justify-between text-stone-600">
+                          <span>Gross Claimed Amount</span>
+                          <span className="font-semibold">${parseFloat(String(selectedClaimInvoice.claimedAmount)).toLocaleString()}</span>
+                        </div>
+                        <div className="flex justify-between text-stone-600">
+                          <span>Policy Deductible / Copay</span>
+                          <span className="font-semibold text-emerald-700 font-bold">$0.00 (Covered)</span>
+                        </div>
+                        <div className="pt-2 border-t border-stone-200 flex justify-between items-center text-sm">
+                          <span className="font-black text-[#2E3523]">Approved Net Payout</span>
+                          <span className="font-black text-emerald-700 text-base">
+                            ${parseFloat(String(selectedClaimInvoice.approvedAmount || selectedClaimInvoice.claimedAmount)).toLocaleString()}
+                          </span>
+                        </div>
+                        <div className="flex justify-between text-[11px] text-stone-500">
+                          <span>Disbursement Method</span>
+                          <span className="font-bold text-stone-800">Direct Deposit / Wire Settlement</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Authorization Certificate */}
+                  <div className="bg-emerald-50/80 border border-emerald-200/90 rounded-2xl p-3.5 text-xs text-emerald-900 flex items-start space-x-2.5">
+                    <Check className="w-4 h-4 flex-shrink-0 text-emerald-600 mt-0.5" />
+                    <p className="text-[11px] leading-relaxed">
+                      <strong>Official Payout Authorization:</strong> This settlement invoice confirms that claim <strong>{selectedClaimInvoice.claimNumber}</strong> for <strong>{selectedClaimInvoice.insuredName}</strong> has been officially adjudicated and approved. Payout has been sanctioned in full accordance with InsureFlow policy terms.
+                    </p>
+                  </div>
+
+                  {/* Modal Actions */}
+                  <div className="flex flex-wrap items-center justify-between gap-3 pt-6 mt-4 border-t border-stone-200 print:hidden">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedClaimInvoice(null)}
+                      className="px-4 py-2.5 border border-stone-300 rounded-xl text-xs font-bold text-stone-700 bg-white hover:bg-stone-50 transition shadow-xs"
+                    >
+                      Close
+                    </button>
+
+                    <div className="flex items-center space-x-2.5">
+                      <button
+                        type="button"
+                        onClick={() => window.print()}
+                        className="inline-flex items-center space-x-1.5 px-4 py-2.5 border border-[#D8CBB9] bg-stone-100 hover:bg-stone-200 text-stone-800 rounded-xl text-xs font-bold transition shadow-xs"
+                        title="Print or save claim settlement invoice as PDF"
+                      >
+                        <Printer className="w-3.5 h-3.5 text-stone-600" />
+                        <span>Print / Save PDF</span>
+                      </button>
+
+                      {/* Mail button ONLY permitted if claim status is APPROVED */}
+                      {selectedClaimInvoice.status === 'APPROVED' ? (
+                        <button
+                          type="button"
+                          onClick={() => handleSendClaimInvoice(selectedClaimInvoice.id)}
+                          disabled={isSendingClaimInvoice === selectedClaimInvoice.id}
+                          className="inline-flex items-center space-x-1.5 px-4 py-2.5 bg-[#5A6644] hover:bg-[#495436] text-white rounded-xl text-xs font-bold transition shadow-md disabled:opacity-50"
+                        >
+                          <Send className="w-3.5 h-3.5" />
+                          <span>{isSendingClaimInvoice === selectedClaimInvoice.id ? 'Mailing Claim Invoice...' : 'Mail Invoice to Customer'}</span>
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled
+                          className="inline-flex items-center space-x-1.5 px-4 py-2.5 bg-stone-200 text-stone-400 rounded-xl text-xs font-bold cursor-not-allowed"
+                          title="Invoice mailing is only permitted for APPROVED claims"
+                        >
+                          <Send className="w-3.5 h-3.5" />
+                          <span>Mail Invoice (Requires Approval)</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
                 </div>
               </div>
             )}
@@ -3577,7 +3906,7 @@ export const AdminDashboard: React.FC = () => {
                             {/* Actions */}
                             <td className="py-3.5 px-4 text-right">
                               <div className="flex items-center justify-end space-x-1.5">
-                                {record.status !== 'PAID' && (
+                                {record.status !== 'PAID' ? (
                                   <button
                                     type="button"
                                     onClick={() => handleSendReminder(record.id)}
@@ -3588,6 +3917,28 @@ export const AdminDashboard: React.FC = () => {
                                     <Mail className="w-3 h-3" />
                                     <span>{isSendingReminder === record.id ? 'Sending...' : 'Remind'}</span>
                                   </button>
+                                ) : (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => setSelectedInvoiceRecord(record)}
+                                      className="px-2.5 py-1.5 rounded-lg bg-[#8B9A6E]/20 hover:bg-[#8B9A6E]/35 text-[#3D472E] border border-[#8B9A6E]/40 text-[11px] font-bold transition shadow-xs flex items-center space-x-1"
+                                      title="Generate and view customer invoice"
+                                    >
+                                      <FileText className="w-3 h-3 text-[#5A6644]" />
+                                      <span>Invoice</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleSendInvoice(record.id)}
+                                      disabled={isSendingInvoice === record.id}
+                                      className="px-2.5 py-1.5 rounded-lg bg-[#5A6644] hover:bg-[#495436] text-white text-[11px] font-bold transition shadow-xs flex items-center space-x-1 disabled:opacity-50"
+                                      title="Email official paid invoice to customer"
+                                    >
+                                      <Send className="w-3 h-3" />
+                                      <span>{isSendingInvoice === record.id ? 'Mailing...' : 'Mail Invoice'}</span>
+                                    </button>
+                                  </>
                                 )}
                                 <button
                                   type="button"
@@ -3803,127 +4154,6 @@ export const AdminDashboard: React.FC = () => {
         {/* BILLING DETAIL MODAL */}
         {selectedBillingRecord && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
-            <div className="bg-[#EAE2D6] border border-[#D8CBB9] rounded-3xl p-6 sm:p-7 max-w-xl w-full shadow-2xl relative max-h-[90vh] overflow-y-auto">
-              <button
-                onClick={() => setSelectedBillingRecord(null)}
-                className="absolute top-4 right-4 p-2 text-stone-500 hover:text-stone-900 hover:bg-[#D8CBB9] rounded-xl transition"
-              >
-                <X className="w-4 h-4" />
-              </button>
-
-              <div className="flex items-center space-x-3 mb-5">
-                <div className="w-10 h-10 rounded-xl bg-[#8B9A6E] flex items-center justify-center text-white shadow-sm">
-                  <CreditCard className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-lg font-bold text-[#2E3523]">Billing Record Details</h3>
-                  <p className="text-xs text-stone-600">
-                    Policy {selectedBillingRecord.policyNumber} &bull; {new Date(selectedBillingRecord.billingMonth).toLocaleString('default', { month: 'long', year: 'numeric' })}
-                  </p>
-                </div>
-              </div>
-
-              {/* Customer Info */}
-              <div className="bg-white/80 rounded-2xl p-4 mb-4 border border-[#D8CBB9] space-y-2">
-                <h4 className="text-xs font-bold uppercase tracking-wider text-[#5A6644] mb-2 flex items-center space-x-1.5">
-                  <Users className="w-3.5 h-3.5" />
-                  <span>Customer Information</span>
-                </h4>
-                <div className="grid grid-cols-2 gap-3 text-xs">
-                  <div><span className="text-stone-500">Name</span><p className="font-bold text-stone-900">{selectedBillingRecord.customerName}</p></div>
-                  <div><span className="text-stone-500">Email</span><p className="font-semibold text-stone-800">{selectedBillingRecord.customerEmail}</p></div>
-                  <div><span className="text-stone-500">Phone</span><p className="font-semibold text-stone-800">{selectedBillingRecord.customerPhone || '—'}</p></div>
-                  <div><span className="text-stone-500">Product</span><p className="font-semibold text-stone-800">{selectedBillingRecord.productName}</p></div>
-                  <div className="col-span-2">
-                    <span className="text-stone-500">Address</span>
-                    <p className="font-semibold text-stone-800">
-                      {selectedBillingRecord.addressLine1}{selectedBillingRecord.addressLine2 ? `, ${selectedBillingRecord.addressLine2}` : ''}, {selectedBillingRecord.city}, {selectedBillingRecord.state} {selectedBillingRecord.zipCode}
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Payment Info */}
-              <div className="bg-white/80 rounded-2xl p-4 mb-4 border border-[#D8CBB9] space-y-2">
-                <h4 className="text-xs font-bold uppercase tracking-wider text-[#5A6644] mb-2 flex items-center space-x-1.5">
-                  <Banknote className="w-3.5 h-3.5" />
-                  <span>Payment &amp; Coverage Summary</span>
-                </h4>
-                <div className="grid grid-cols-2 gap-3 text-xs">
-                  <div><span className="text-stone-500">Amount Due</span><p className="font-extrabold text-[#2E3523] text-base">${parseFloat(String(selectedBillingRecord.amount)).toFixed(2)}</p></div>
-                  <div>
-                    <span className="text-stone-500">Status</span>
-                    <div>
-                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border mt-0.5 ${
-                        selectedBillingRecord.status === 'PAID' ? 'bg-emerald-100 text-emerald-800 border-emerald-300' :
-                        selectedBillingRecord.status === 'FAILED' ? 'bg-red-100 text-red-800 border-red-300' :
-                        selectedBillingRecord.status === 'RETRY_SCHEDULED' ? 'bg-orange-100 text-orange-800 border-orange-300' :
-                        'bg-amber-100 text-amber-800 border-amber-300'
-                      }`}>
-                        {selectedBillingRecord.status}
-                      </span>
-                    </div>
-                  </div>
-                  <div><span className="text-stone-500">Due Date</span><p className="font-semibold text-stone-800">{selectedBillingRecord.dueDate ? new Date(selectedBillingRecord.dueDate).toLocaleDateString() : '—'}</p></div>
-                  <div><span className="text-stone-500">Paid At</span><p className="font-semibold text-stone-800">{selectedBillingRecord.paidAt ? new Date(selectedBillingRecord.paidAt).toLocaleString() : 'Not Paid Yet'}</p></div>
-                  <div><span className="text-stone-500">Monthly Premium</span><p className="font-bold text-stone-900">${parseFloat(String(selectedBillingRecord.monthlyPremium)).toFixed(2)}/mo</p></div>
-                  <div><span className="text-stone-500">Cover Amount</span><p className="font-bold text-stone-900">${parseFloat(String(selectedBillingRecord.coverAmount)).toLocaleString()}</p></div>
-                </div>
-              </div>
-
-              {/* Retry History */}
-              {selectedBillingRecord.retryHistory && selectedBillingRecord.retryHistory.length > 0 && (
-                <div className="bg-orange-50/90 border border-orange-200 rounded-2xl p-4 mb-4">
-                  <h4 className="text-xs font-bold uppercase tracking-wider text-orange-800 mb-3 flex items-center space-x-1.5">
-                    <RotateCcw className="w-3.5 h-3.5 text-orange-600" />
-                    <span>Payment Retry History ({selectedBillingRecord.retryHistory.length} attempts)</span>
-                  </h4>
-                  <div className="space-y-2">
-                    {selectedBillingRecord.retryHistory.map((r) => (
-                      <div key={r.id} className="bg-white rounded-xl p-3 border border-orange-200 text-xs shadow-xs">
-                        <div className="flex items-center justify-between">
-                          <span className="font-bold text-orange-900">Attempt #{r.retryNumber}</span>
-                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${r.attemptedAt ? 'bg-stone-100 text-stone-600' : 'bg-orange-100 text-orange-800'}`}>
-                            {r.attemptedAt ? 'Attempted' : 'Scheduled'}
-                          </span>
-                        </div>
-                        <p className="text-stone-500 mt-1">Scheduled for: {new Date(r.scheduledAt).toLocaleString()}</p>
-                        {r.attemptedAt && <p className="text-stone-600 mt-0.5">Attempted at: {new Date(r.attemptedAt).toLocaleString()}</p>}
-                        {r.result && <p className="text-stone-800 mt-1 font-semibold">{r.result}</p>}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Actions */}
-              <div className="flex justify-between items-center pt-4 border-t border-[#D8CBB9]">
-                <button
-                  type="button"
-                  onClick={() => setSelectedBillingRecord(null)}
-                  className="px-4 py-2 border border-[#D8CBB9] rounded-xl text-xs font-bold text-stone-700 bg-white hover:bg-stone-50 transition"
-                >
-                  Close
-                </button>
-                {selectedBillingRecord.status !== 'PAID' && (
-                  <button
-                    type="button"
-                    onClick={() => { handleSendReminder(selectedBillingRecord.id); setSelectedBillingRecord(null); }}
-                    disabled={isSendingReminder === selectedBillingRecord.id}
-                    className="inline-flex items-center space-x-1.5 px-4 py-2 bg-[#5A6644] hover:bg-[#495436] text-white rounded-xl text-xs font-bold transition shadow disabled:opacity-50"
-                  >
-                    <Mail className="w-3.5 h-3.5" />
-                    <span>Send Payment Reminder Email</span>
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* BILLING DETAIL MODAL */}
-        {selectedBillingRecord && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
             <div className="bg-[#EAE2D6] border border-[#D8CBB9] rounded-3xl p-6 sm:p-7 max-w-2xl w-full shadow-2xl relative max-h-[90vh] overflow-y-auto">
               <button
                 onClick={() => setSelectedBillingRecord(null)}
@@ -4018,7 +4248,7 @@ export const AdminDashboard: React.FC = () => {
               )}
 
               {/* Actions */}
-              <div className="flex justify-between items-center pt-4 border-t border-[#D8CBB9]">
+              <div className="flex flex-wrap justify-between items-center gap-3 pt-4 border-t border-[#D8CBB9]">
                 <button
                   type="button"
                   onClick={() => setSelectedBillingRecord(null)}
@@ -4026,17 +4256,234 @@ export const AdminDashboard: React.FC = () => {
                 >
                   Close
                 </button>
-                {selectedBillingRecord.status !== 'PAID' && (
+
+                <div className="flex items-center space-x-2">
+                  {selectedBillingRecord.status === 'PAID' ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const rec = selectedBillingRecord;
+                          setSelectedBillingRecord(null);
+                          setSelectedInvoiceRecord(rec);
+                        }}
+                        className="inline-flex items-center space-x-1.5 px-3.5 py-2 bg-[#8B9A6E]/20 hover:bg-[#8B9A6E]/30 text-[#2E3523] border border-[#8B9A6E]/40 rounded-xl text-xs font-bold transition shadow-xs"
+                      >
+                        <FileText className="w-3.5 h-3.5 text-[#5A6644]" />
+                        <span>View Full Invoice</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleSendInvoice(selectedBillingRecord.id);
+                          setSelectedBillingRecord(null);
+                        }}
+                        disabled={isSendingInvoice === selectedBillingRecord.id}
+                        className="inline-flex items-center space-x-1.5 px-4 py-2 bg-[#5A6644] hover:bg-[#495436] text-white rounded-xl text-xs font-bold transition shadow disabled:opacity-50"
+                      >
+                        <Send className="w-3.5 h-3.5" />
+                        <span>{isSendingInvoice === selectedBillingRecord.id ? 'Sending...' : 'Mail Invoice to Customer'}</span>
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => { handleSendReminder(selectedBillingRecord.id); setSelectedBillingRecord(null); }}
+                      disabled={isSendingReminder === selectedBillingRecord.id}
+                      className="inline-flex items-center space-x-1.5 px-4 py-2 bg-[#5A6644] hover:bg-[#495436] text-white rounded-xl text-xs font-bold transition shadow disabled:opacity-50"
+                    >
+                      <Mail className="w-3.5 h-3.5" />
+                      <span>Send Payment Reminder Email</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* INVOICE MODAL (INS-7) */}
+        {selectedInvoiceRecord && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+            <div className="bg-white border border-stone-200 rounded-3xl p-6 sm:p-8 max-w-2xl w-full shadow-2xl relative max-h-[92vh] overflow-y-auto text-stone-800">
+              {/* Close Button */}
+              <button
+                onClick={() => setSelectedInvoiceRecord(null)}
+                className="absolute top-4 right-4 p-2 text-stone-400 hover:text-stone-700 hover:bg-stone-100 rounded-xl transition print:hidden"
+              >
+                <X className="w-5 h-5" />
+              </button>
+
+              {/* Invoice Header */}
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-6 border-b border-stone-200 gap-4">
+                <div className="flex items-center space-x-3">
+                  <div className="w-11 h-11 rounded-2xl bg-[#5A6644] flex items-center justify-center text-white shadow-md">
+                    <ShieldCheck className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-black text-[#2E3523] tracking-tight">Insure<span className="text-[#8B9A6E]">Flow</span></h2>
+                    <p className="text-[11px] text-stone-500 font-medium">Underwriting &amp; Premium Billing Services</p>
+                  </div>
+                </div>
+
+                <div className="text-left sm:text-right">
+                  <span className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full text-xs font-black bg-emerald-100 text-emerald-800 border border-emerald-300">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>OFFICIAL PAID INVOICE</span>
+                  </span>
+                  <p className="text-xs font-mono font-bold text-stone-800 mt-1.5">
+                    INV-{selectedInvoiceRecord.policyNumber.replace('POL-', '')}-{selectedInvoiceRecord.id.substring(0, 8).toUpperCase()}
+                  </p>
+                </div>
+              </div>
+
+              {/* Invoice Metadata Row */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 py-4 border-b border-stone-100 text-xs">
+                <div>
+                  <span className="text-stone-400 font-semibold block text-[10px] uppercase">Invoice Date</span>
+                  <p className="font-bold text-stone-800 mt-0.5">
+                    {new Date(selectedInvoiceRecord.billingMonth).toLocaleDateString('default', { month: 'short', day: 'numeric', year: 'numeric' })}
+                  </p>
+                </div>
+                <div>
+                  <span className="text-stone-400 font-semibold block text-[10px] uppercase">Payment Date</span>
+                  <p className="font-bold text-emerald-700 mt-0.5">
+                    {selectedInvoiceRecord.paidAt ? new Date(selectedInvoiceRecord.paidAt).toLocaleDateString('default', { month: 'short', day: 'numeric', year: 'numeric' }) : 'Settled on Cycle'}
+                  </p>
+                </div>
+                <div>
+                  <span className="text-stone-400 font-semibold block text-[10px] uppercase">Policy Number</span>
+                  <p className="font-mono font-bold text-stone-800 mt-0.5">{selectedInvoiceRecord.policyNumber}</p>
+                </div>
+                <div>
+                  <span className="text-stone-400 font-semibold block text-[10px] uppercase">Payment Status</span>
+                  <p className="font-extrabold text-emerald-700 mt-0.5 flex items-center space-x-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                    <span>PAID IN FULL</span>
+                  </p>
+                </div>
+              </div>
+
+              {/* Billed By & Billed To */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 py-5 text-xs border-b border-stone-100">
+                <div className="bg-stone-50 rounded-2xl p-4 border border-stone-200/80">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#5A6644] block mb-1.5">Billed From (Insurer)</span>
+                  <p className="font-bold text-stone-900">InsureFlow Underwriting Services LLC</p>
+                  <p className="text-stone-600 mt-0.5">100 Financial Way, Suite 400</p>
+                  <p className="text-stone-600">New York, NY 10005</p>
+                  <p className="text-stone-600 mt-1">billing@insureflow.com &bull; +1 (800) 555-FLOW</p>
+                </div>
+
+                <div className="bg-[#F4EFE6]/70 rounded-2xl p-4 border border-[#D8CBB9]/80">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#5A6644] block mb-1.5">Billed To (Policyholder)</span>
+                  <p className="font-bold text-stone-900">{selectedInvoiceRecord.customerName}</p>
+                  <p className="text-stone-600 mt-0.5">{selectedInvoiceRecord.customerEmail}</p>
+                  <p className="text-stone-600">{selectedInvoiceRecord.customerPhone || 'Phone: Not specified'}</p>
+                  <p className="text-stone-600 mt-1">
+                    {selectedInvoiceRecord.addressLine1}{selectedInvoiceRecord.addressLine2 ? `, ${selectedInvoiceRecord.addressLine2}` : ''}, {selectedInvoiceRecord.city}, {selectedInvoiceRecord.state} {selectedInvoiceRecord.zipCode}
+                  </p>
+                </div>
+              </div>
+
+              {/* Itemized Policy Charges Table */}
+              <div className="py-5">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-stone-500 mb-3">Itemized Policy Statement</h4>
+                <div className="border border-stone-200 rounded-2xl overflow-hidden shadow-xs">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-[#EAE2D6]/70 border-b border-[#D8CBB9] text-[11px] font-bold text-[#2E3523] uppercase">
+                      <tr>
+                        <th className="py-2.5 px-4">Coverage Description</th>
+                        <th className="py-2.5 px-4 text-center">Period</th>
+                        <th className="py-2.5 px-4 text-right">Coverage Cap</th>
+                        <th className="py-2.5 px-4 text-right">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-stone-100">
+                      <tr>
+                        <td className="py-3 px-4">
+                          <p className="font-bold text-stone-900">{selectedInvoiceRecord.productName}</p>
+                          <p className="text-[11px] text-stone-500 mt-0.5">Policy #{selectedInvoiceRecord.policyNumber} &bull; Monthly Premium Coverage</p>
+                        </td>
+                        <td className="py-3 px-4 text-center text-stone-600 font-medium">
+                          {new Date(selectedInvoiceRecord.billingMonth).toLocaleString('default', { month: 'long', year: 'numeric' })}
+                        </td>
+                        <td className="py-3 px-4 text-right font-medium text-stone-700">
+                          ${parseFloat(String(selectedInvoiceRecord.coverAmount)).toLocaleString()}
+                        </td>
+                        <td className="py-3 px-4 text-right font-extrabold text-[#2E3523]">
+                          ${parseFloat(String(selectedInvoiceRecord.amount)).toFixed(2)}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Subtotals & Total */}
+                <div className="flex justify-end mt-4">
+                  <div className="w-64 space-y-2 text-xs">
+                    <div className="flex justify-between text-stone-600">
+                      <span>Subtotal</span>
+                      <span className="font-semibold">${parseFloat(String(selectedInvoiceRecord.amount)).toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between text-stone-600">
+                      <span>State Insurance Surcharge</span>
+                      <span className="font-semibold">$0.00</span>
+                    </div>
+                    <div className="flex justify-between text-stone-600">
+                      <span>Gateway Processing Fee</span>
+                      <span className="font-semibold text-emerald-700 font-bold">Waived</span>
+                    </div>
+                    <div className="pt-2 border-t border-stone-200 flex justify-between items-center text-sm">
+                      <span className="font-black text-[#2E3523]">Total Paid</span>
+                      <span className="font-black text-emerald-700 text-base">${parseFloat(String(selectedInvoiceRecord.amount)).toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between text-[11px] text-stone-500">
+                      <span>Outstanding Balance</span>
+                      <span className="font-bold text-stone-800">$0.00 (Zero Due)</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Receipt Note */}
+              <div className="bg-emerald-50/80 border border-emerald-200/90 rounded-2xl p-3.5 text-xs text-emerald-900 flex items-start space-x-2.5">
+                <Check className="w-4 h-4 flex-shrink-0 text-emerald-600 mt-0.5" />
+                <p className="text-[11px] leading-relaxed">
+                  Thank you for your timely payment. This receipt confirms that coverage for <strong>{selectedInvoiceRecord.customerName}</strong> under policy <strong>{selectedInvoiceRecord.policyNumber}</strong> is active and in good standing.
+                </p>
+              </div>
+
+              {/* Modal Actions */}
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-6 mt-4 border-t border-stone-200 print:hidden">
+                <button
+                  type="button"
+                  onClick={() => setSelectedInvoiceRecord(null)}
+                  className="px-4 py-2.5 border border-stone-300 rounded-xl text-xs font-bold text-stone-700 bg-white hover:bg-stone-50 transition shadow-xs"
+                >
+                  Close
+                </button>
+
+                <div className="flex items-center space-x-2.5">
                   <button
                     type="button"
-                    onClick={() => { handleSendReminder(selectedBillingRecord.id); setSelectedBillingRecord(null); }}
-                    disabled={isSendingReminder === selectedBillingRecord.id}
-                    className="inline-flex items-center space-x-1.5 px-4 py-2 bg-[#8B9A6E] hover:bg-[#738258] text-white rounded-xl text-xs font-bold transition shadow disabled:opacity-50"
+                    onClick={() => window.print()}
+                    className="inline-flex items-center space-x-1.5 px-4 py-2.5 border border-[#D8CBB9] bg-stone-100 hover:bg-stone-200 text-stone-800 rounded-xl text-xs font-bold transition shadow-xs"
+                    title="Print or save invoice as PDF"
                   >
-                    <Mail className="w-3.5 h-3.5" />
-                    <span>Send Payment Reminder Email</span>
+                    <Printer className="w-3.5 h-3.5 text-stone-600" />
+                    <span>Print / Save PDF</span>
                   </button>
-                )}
+
+                  <button
+                    type="button"
+                    onClick={() => handleSendInvoice(selectedInvoiceRecord.id)}
+                    disabled={isSendingInvoice === selectedInvoiceRecord.id}
+                    className="inline-flex items-center space-x-1.5 px-4 py-2.5 bg-[#5A6644] hover:bg-[#495436] text-white rounded-xl text-xs font-bold transition shadow-md disabled:opacity-50"
+                  >
+                    <Send className="w-3.5 h-3.5" />
+                    <span>{isSendingInvoice === selectedInvoiceRecord.id ? 'Mailing Invoice...' : 'Mail Invoice to Customer'}</span>
+                  </button>
+                </div>
               </div>
             </div>
           </div>
