@@ -178,7 +178,9 @@ public class PolicyController {
 
     @PostMapping("/api/enrollment/validate-code")
     public ResponseEntity<Object> validateCode(@RequestBody(required = false) String raw) {
-        Object code = prop(parseBody(raw), "code");
+        Object b = parseBody(raw);
+        Object code = prop(b, "code");
+        Object spokenKey = prop(b, "spokenKey");
         if (!truthy(code)) return json(400, obj("valid", false, "error", "Campaign code is required."));
 
         try {
@@ -194,7 +196,7 @@ public class PolicyController {
                 return json(404, obj("valid", false, "error", "Campaign code does not exist. Check code and try again."));
             }
             Map<String, Object> r = result.get(0);
-            return ok(obj("valid", true, "code", r.get("code"), "campaignName", r.get("campaign_name"),
+            return ok(obj("valid", true, "code", r.get("code"), "spokenKey", spokenKey, "campaignName", r.get("campaign_name"),
                     "productName", r.get("product_name"), "productCode", r.get("product_code")));
         } catch (RuntimeException e) {
             System.err.println("Error validating campaign code: " + e);
