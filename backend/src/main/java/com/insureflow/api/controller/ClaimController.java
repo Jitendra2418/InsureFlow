@@ -100,6 +100,7 @@ public class ClaimController {
         Object b = parseBody(raw);
         Object user = Auth.staff(req);
         Object status = prop(b, "status"), reviewerNotes = prop(b, "reviewerNotes"), approvedAmount = prop(b, "approvedAmount");
+        Object claimedAmount = or(prop(b, "claimedAmount"), prop(b, "approvedAmount"));
 
         if (!truthy(status) || !(status instanceof String s && VALID_STATUSES.contains(s))) {
             return error(400, "Invalid status. Must be one of: " + String.join(", ", VALID_STATUSES));
@@ -111,19 +112,23 @@ public class ClaimController {
                       SET
                         status = $1::text,
                         reviewer_notes = COALESCE($2::text, reviewer_notes),
-                        approved_amount = CASE\s
-                          WHEN $1::text = 'APPROVED' AND $3::numeric IS NOT NULL THEN $3::numeric
-                          WHEN $1::text = 'APPROVED' AND approved_amount IS NULL THEN claimed_amount
+                        claimed_amount = CASE 
+                          WHEN $3::numeric IS NOT NULL THEN $3::numeric 
+                          ELSE claimed_amount 
+                        END,
+                        approved_amount = CASE 
+                          WHEN $1::text = 'APPROVED' AND $4::numeric IS NOT NULL THEN $4::numeric
+                          WHEN $1::text = 'APPROVED' AND approved_amount IS NULL THEN COALESCE($3::numeric, claimed_amount)
                           WHEN $1::text = 'REJECTED' THEN 0::numeric
                           ELSE approved_amount
                         END,
-                        reviewed_by = $4::uuid,
+                        reviewed_by = $5::uuid,
                         reviewed_at = CURRENT_TIMESTAMP,
                         updated_at = CURRENT_TIMESTAMP
-                      WHERE id = $5::uuid
+                      WHERE id = $6::uuid
                       RETURNING *
                     """,
-                    status, or(reviewerNotes, null), isUndefined(approvedAmount) ? null : approvedAmount, Auth.id(user), id);
+                    status, or(reviewerNotes, null), isUndefined(claimedAmount) ? null : claimedAmount, isUndefined(approvedAmount) ? null : approvedAmount, Auth.id(user), id);
 
             if (result.isEmpty()) return error(404, "Claim not found.");
             return ok(obj("message", "Claim status successfully updated to \"" + status + "\".", "claim", result.get(0)));
@@ -187,6 +192,125 @@ public class ClaimController {
             return json(201, obj("message", "Claim " + claimNumber + " submitted successfully.", "claim", claim));
         } catch (RuntimeException e) {
             return dbFail("Error submitting claim:", e);
+        }
+    }
+
+    @PostMapping("/api/admin/claims/{id}/send-invoice")
+    public ResponseEntity<Object> sendClaimInvoice(HttpServletRequest req, @PathVariable String id) {
+        Auth.staff(req);
+        try {
+            List<Map<String, Object>> result = db.query("""
+                      SELECT
+                        c.id, c.claim_number, c.policy_id, c.status,
+                        c.claimed_amount, c.approved_amount, c.incident_type,
+                        c.incident_date, c.description, c.reviewer_notes, c.reviewed_at,
+                        p.policy_number, p.cover_amount, p.address_line1, p.city, p.state, p.zip_code,
+                        u.email, u.first_name, u.last_name, u.phone,
+                        pr.name AS product_name
+                      FROM claims c
+                      JOIN policies p ON c.policy_id = p.id
+                      JOIN users u ON c.user_id = u.id
+                      JOIN products pr ON p.product_id = pr.id
+                      WHERE c.id = $1::uuid
+                    """, id);
+            if (result.isEmpty()) return error(404, "Claim not found.");
+
+            Map<String, Object> claim = result.get(0);
+            String status = str(claim.get("status"));
+            if (!"APPROVED".equalsIgnoreCase(status)) {
+                return error(400, "Claim invoice can ONLY be generated and mailed for APPROVED claims. Current status: " + status);
+            }
+
+            String claimNumber = str(claim.get("claim_number"));
+            String policyNumber = str(claim.get("policy_number"));
+            String email = str(claim.get("email"));
+            String insuredName = str(claim.get("first_name")) + " " + str(claim.get("last_name"));
+            String invoiceNumber = "INV-" + claimNumber.replace("CLM-", "SETTLE-");
+            double settlementAmount = claim.get("approved_amount") != null ?
+                    parseFloat(claim.get("approved_amount")) : parseFloat(claim.get("claimed_amount"));
+            String reviewedAtStr = claim.get("reviewed_at") != null ? claim.get("reviewed_at").toString() : JsDate.now().toISOString();
+
+            // Mock email dispatch for approved claim settlement invoice
+            System.out.println("\n🧾 [Mock Email] Approved Claim Settlement Invoice #" + invoiceNumber + " dispatched to " + email);
+            System.out.println("   Claimant:         " + insuredName + " <" + email + ">");
+            System.out.println("   Claim #:          " + claimNumber);
+            System.out.println("   Policy #:         " + policyNumber);
+            System.out.println("   Product:          " + str(claim.get("product_name")));
+            System.out.println("   Incident:         " + str(claim.get("incident_type")));
+            System.out.println("   Approved Payout:  $" + settlementAmount);
+            System.out.println("   Reviewed At:      " + reviewedAtStr);
+            System.out.println("   Adjudication Note:" + str(or(claim.get("reviewer_notes"), "Claim approved by Claims Administrator")));
+            System.out.println("   Status:           APPROVED (Settlement Authorized)\n");
+
+            return ok(obj(
+                    "message", "Claim settlement invoice " + invoiceNumber + " sent successfully to " + email,
+                    "invoiceNumber", invoiceNumber,
+                    "claimNumber", claimNumber,
+                    "recipient", obj("name", insuredName, "email", email),
+                    "policyNumber", policyNumber,
+                    "productName", claim.get("product_name"),
+                    "approvedAmount", settlementAmount,
+                    "reviewedAt", reviewedAtStr,
+                    "sentAt", JsDate.now().toISOString()));
+        } catch (RuntimeException e) {
+            return dbFail("Error sending claim invoice:", e);
+        }
+    }
+
+    @GetMapping("/api/admin/claims/{id}/invoice")
+    public ResponseEntity<Object> getClaimInvoice(HttpServletRequest req, @PathVariable String id) {
+        Auth.staff(req);
+        try {
+            List<Map<String, Object>> result = db.query("""
+                      SELECT
+                        c.id, c.claim_number, c.policy_id, c.status,
+                        c.claimed_amount, c.approved_amount, c.incident_type,
+                        c.incident_date, c.description, c.reviewer_notes, c.reviewed_at,
+                        p.policy_number, p.cover_amount, p.address_line1, p.city, p.state, p.zip_code,
+                        u.email, u.first_name, u.last_name, u.phone,
+                        pr.name AS product_name
+                      FROM claims c
+                      JOIN policies p ON c.policy_id = p.id
+                      JOIN users u ON c.user_id = u.id
+                      JOIN products pr ON p.product_id = pr.id
+                      WHERE c.id = $1::uuid
+                    """, id);
+            if (result.isEmpty()) return error(404, "Claim not found.");
+
+            Map<String, Object> claim = result.get(0);
+            String status = str(claim.get("status"));
+            if (!"APPROVED".equalsIgnoreCase(status)) {
+                return error(400, "Claim invoice is only available for claims that have been APPROVED by the administrator.");
+            }
+
+            String claimNumber = str(claim.get("claim_number"));
+            String invoiceNumber = "INV-" + claimNumber.replace("CLM-", "SETTLE-");
+            double settlementAmount = claim.get("approved_amount") != null ?
+                    parseFloat(claim.get("approved_amount")) : parseFloat(claim.get("claimed_amount"));
+
+            return ok(obj(
+                    "invoiceNumber", invoiceNumber,
+                    "claimId", claim.get("id"),
+                    "claimNumber", claimNumber,
+                    "policyNumber", claim.get("policy_number"),
+                    "productName", claim.get("product_name"),
+                    "incidentType", claim.get("incident_type"),
+                    "incidentDate", claim.get("incident_date"),
+                    "description", claim.get("description"),
+                    "claimedAmount", parseFloat(claim.get("claimed_amount")),
+                    "approvedAmount", settlementAmount,
+                    "reviewerNotes", claim.get("reviewer_notes"),
+                    "status", "APPROVED",
+                    "reviewedAt", claim.get("reviewed_at"),
+                    "claimant", obj(
+                            "name", str(claim.get("first_name")) + " " + str(claim.get("last_name")),
+                            "email", claim.get("email"),
+                            "phone", claim.get("phone"),
+                            "address", str(claim.get("address_line1")) + ", " + str(claim.get("city")) + ", " + str(claim.get("state")) + " " + str(claim.get("zip_code"))
+                    )
+            ));
+        } catch (RuntimeException e) {
+            return dbFail("Error fetching claim invoice:", e);
         }
     }
 }

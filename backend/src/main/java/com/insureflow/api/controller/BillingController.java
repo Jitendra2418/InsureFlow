@@ -189,4 +189,111 @@ public class BillingController {
             return dbFail("Error sending reminder:", e);
         }
     }
+
+    @PostMapping("/api/admin/billing/{id}/send-invoice")
+    public ResponseEntity<Object> sendInvoice(HttpServletRequest req, @PathVariable String id) {
+        Auth.staff(req);
+        try {
+            List<Map<String, Object>> result = db.query("""
+                      SELECT pr.id, pr.amount, pr.billing_month, pr.status, pr.paid_at,
+                             p.policy_number, p.cover_amount, pr2.name AS product_name,
+                             u.email, u.first_name, u.last_name, u.phone,
+                             p.address_line1, p.address_line2, p.city, p.state, p.zip_code
+                      FROM premium_records pr
+                      JOIN policies p ON pr.policy_id = p.id
+                      JOIN users u ON p.user_id = u.id
+                      JOIN products pr2 ON p.product_id = pr2.id
+                      WHERE pr.id = $1::uuid
+                    """, id);
+            if (result.isEmpty()) return error(404, "Billing record not found.");
+
+            Map<String, Object> record = result.get(0);
+            String status = str(record.get("status"));
+            if (!"PAID".equalsIgnoreCase(status)) {
+                return error(400, "Invoices can only be generated and sent for PAID records. Current status: " + status);
+            }
+
+            String billingMonth = JsDate.parse(record.get("billing_month")).toMonthYear();
+            String email = str(record.get("email"));
+            String customerName = str(record.get("first_name")) + " " + str(record.get("last_name"));
+            String policyNumber = str(record.get("policy_number"));
+            String shortId = id.length() >= 8 ? id.substring(0, 8).toUpperCase() : id.toUpperCase();
+            String invoiceNumber = "INV-" + policyNumber.replace("POL-", "") + "-" + shortId;
+            String paidAtStr = record.get("paid_at") != null ? record.get("paid_at").toString() : JsDate.now().toISOString();
+
+            // Mock email dispatch log (in production: integrate SendGrid / SES / SMTP mailer)
+            System.out.println("\n🧾 [Mock Email] Official Paid Invoice #" + invoiceNumber + " dispatched to " + email);
+            System.out.println("   Recipient:    " + customerName + " <" + email + ">");
+            System.out.println("   Policy #:     " + policyNumber);
+            System.out.println("   Product:      " + str(record.get("product_name")));
+            System.out.println("   Billing Month:" + billingMonth);
+            System.out.println("   Total Paid:   $" + str(record.get("amount")));
+            System.out.println("   Payment Date: " + paidAtStr);
+            System.out.println("   Status:       PAID IN FULL (Settled via Payment Gateway)\n");
+
+            return ok(obj(
+                    "message", "Payment invoice " + invoiceNumber + " sent successfully to " + email,
+                    "invoiceNumber", invoiceNumber,
+                    "recipient", obj("name", customerName, "email", email),
+                    "policyNumber", policyNumber,
+                    "productName", record.get("product_name"),
+                    "amount", parseFloat(record.get("amount")),
+                    "billingMonth", billingMonth,
+                    "paidAt", paidAtStr,
+                    "sentAt", JsDate.now().toISOString()));
+        } catch (RuntimeException e) {
+            return dbFail("Error sending invoice:", e);
+        }
+    }
+
+    @GetMapping("/api/admin/billing/{id}/invoice")
+    public ResponseEntity<Object> getInvoice(HttpServletRequest req, @PathVariable String id) {
+        Auth.staff(req);
+        try {
+            List<Map<String, Object>> result = db.query("""
+                      SELECT pr.id, pr.amount, pr.billing_month, pr.status, pr.paid_at, pr.created_at,
+                             p.policy_number, p.cover_amount, p.monthly_premium, pr2.name AS product_name,
+                             u.email, u.first_name, u.last_name, u.phone,
+                             p.address_line1, p.address_line2, p.city, p.state, p.zip_code
+                      FROM premium_records pr
+                      JOIN policies p ON pr.policy_id = p.id
+                      JOIN users u ON p.user_id = u.id
+                      JOIN products pr2 ON p.product_id = pr2.id
+                      WHERE pr.id = $1::uuid
+                    """, id);
+            if (result.isEmpty()) return error(404, "Billing record not found.");
+
+            Map<String, Object> record = result.get(0);
+            String status = str(record.get("status"));
+            if (!"PAID".equalsIgnoreCase(status)) {
+                return error(400, "Invoices are only available for PAID billing records.");
+            }
+
+            String billingMonth = JsDate.parse(record.get("billing_month")).toMonthYear();
+            String policyNumber = str(record.get("policy_number"));
+            String shortId = id.length() >= 8 ? id.substring(0, 8).toUpperCase() : id.toUpperCase();
+            String invoiceNumber = "INV-" + policyNumber.replace("POL-", "") + "-" + shortId;
+
+            return ok(obj(
+                    "invoiceNumber", invoiceNumber,
+                    "recordId", record.get("id"),
+                    "policyNumber", policyNumber,
+                    "productName", record.get("product_name"),
+                    "amount", parseFloat(record.get("amount")),
+                    "monthlyPremium", parseFloat(record.get("monthly_premium")),
+                    "coverAmount", parseFloat(record.get("cover_amount")),
+                    "status", "PAID",
+                    "billingMonth", billingMonth,
+                    "paidAt", record.get("paid_at"),
+                    "customer", obj(
+                            "name", str(record.get("first_name")) + " " + str(record.get("last_name")),
+                            "email", record.get("email"),
+                            "phone", record.get("phone"),
+                            "address", str(record.get("address_line1")) + ", " + str(record.get("city")) + ", " + str(record.get("state")) + " " + str(record.get("zip_code"))
+                    )
+            ));
+        } catch (RuntimeException e) {
+            return dbFail("Error fetching invoice:", e);
+        }
+    }
 }
