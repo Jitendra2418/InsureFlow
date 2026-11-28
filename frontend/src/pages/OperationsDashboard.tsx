@@ -51,7 +51,7 @@ export const OperationsDashboard: React.FC = () => {
 
   useEffect(() => {
     loadOperationsMetrics();
-  }, []);
+  }, [activeTab]);
 
   const handleLogout = () => {
     logout();
