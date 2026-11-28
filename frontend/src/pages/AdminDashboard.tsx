@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { Client, Product, Campaign, CampaignEvent, Segment, CustomerStats, Claim, ClaimStatus, PremiumRecord, BillingStats } from '../types';
 import { apiRequest } from '../api';
@@ -788,6 +788,16 @@ export const AdminDashboard: React.FC = () => {
           </div>
 
           <div className="flex items-center space-x-3 sm:space-x-5">
+            {/* Quick Switch to Operations Dashboard */}
+            <Link
+              to="/operations/dashboard"
+              className="hidden md:inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-[#5A6644] hover:bg-[#EAE2D6] border border-[#D8CBB9] transition shadow-xs"
+              title="Open Operations Command Center"
+            >
+              <Sliders className="w-3.5 h-3.5" />
+              <span>Operations View</span>
+            </Link>
+
             {/* User Profile Pill */}
             <div className="flex items-center space-x-2 bg-[#EAE2D6] px-3.5 py-1.5 rounded-full border border-[#D8CBB9]">
               <div className="w-7 h-7 rounded-full bg-[#5A6644] text-white flex items-center justify-center text-xs font-bold">
@@ -3225,196 +3235,6 @@ export const AdminDashboard: React.FC = () => {
             )}
           </div>
         )}
-      </main>
-
-      {/* Edit Client Modal */}
-      {editingClient && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="bg-[#EAE2D6] border border-[#D8CBB9] rounded-3xl p-6 sm:p-8 max-w-lg w-full shadow-2xl relative">
-            {/* Modal Header */}
-            <div className="flex items-center justify-between pb-4 border-b border-[#D8CBB9]/80">
-              <div className="flex items-center space-x-2 text-[#5A6644]">
-                <Pencil className="w-5 h-5" />
-                <h3 className="text-xl font-bold text-[#2E3523]">Edit Client Profile</h3>
-              </div>
-              <button 
-                onClick={closeEditModal} 
-                className="text-stone-500 hover:text-stone-800 p-1 rounded-lg hover:bg-white/60 transition"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {editError && (
-              <div className="mt-4 p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl flex items-center space-x-2">
-                <AlertCircle className="w-4 h-4 flex-shrink-0 text-red-500" />
-                <span>{editError}</span>
-              </div>
-            )}
-
-            <form onSubmit={handleUpdateClient} className="mt-5 space-y-4">
-              {/* Client ID (Read-only) */}
-              <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1">
-                  Client ID (Fixed)
-                </label>
-                <div className="relative rounded-xl shadow-sm">
-                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-stone-400">
-                    <Hash className="h-4 w-4" />
-                  </div>
-                  <input
-                    type="text"
-                    readOnly
-                    value={editingClient.clientId}
-                    className="block w-full pl-9 pr-3 py-2 bg-stone-100 border border-[#D8CBB9] rounded-xl text-stone-600 font-mono text-xs cursor-not-allowed font-semibold"
-                  />
-                </div>
-              </div>
-
-              {/* Client Name */}
-              <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1">
-                  Client Name <span className="text-red-500">*</span>
-                </label>
-                <div className="relative rounded-xl shadow-sm">
-                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-stone-400">
-                    <Building2 className="h-4 w-4" />
-                  </div>
-                  <input
-                    type="text"
-                    required
-                    value={editName}
-                    onChange={(e) => setEditName(e.target.value)}
-                    className="block w-full pl-9 pr-3 py-2 bg-white border border-[#D8CBB9] rounded-xl text-stone-900 focus:outline-none focus:ring-2 focus:ring-[#8B9A6E] text-xs font-medium"
-                  />
-                </div>
-              </div>
-
-              {/* Business Type & Status */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1">
-                    Business Type
-                  </label>
-                  <select
-                    value={editBusinessType}
-                    onChange={(e) => setEditBusinessType(e.target.value)}
-                    className="block w-full px-3 py-2 bg-white border border-[#D8CBB9] rounded-xl text-stone-900 focus:outline-none focus:ring-2 focus:ring-[#8B9A6E] text-xs font-medium"
-                  >
-                    <option value="Bank">Bank</option>
-                    <option value="Creditunion">Creditunion</option>
-                    <option value="Affinity partner">Affinity partner</option>
-                    <option value="Association">Association</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1">
-                    Status
-                  </label>
-                  <select
-                    value={editStatus}
-                    onChange={(e) => setEditStatus(e.target.value)}
-                    className="block w-full px-3 py-2 bg-white border border-[#D8CBB9] rounded-xl text-stone-900 focus:outline-none focus:ring-2 focus:ring-[#8B9A6E] text-xs font-medium"
-                  >
-                    <option value="A-ACTIVE">A-ACTIVE (Active Partner)</option>
-                    <option value="IA-INACTIVE">IA-INACTIVE (Inactive / Suspended)</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* State */}
-              <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1">
-                  State
-                </label>
-                <select
-                  value={editState}
-                  onChange={(e) => setEditState(e.target.value)}
-                  className="block w-full px-3 py-2 bg-white border border-[#D8CBB9] rounded-xl text-stone-900 focus:outline-none focus:ring-2 focus:ring-[#8B9A6E] text-xs font-medium"
-                >
-                  {US_STATES.map((s) => (
-                    <option key={s} value={s}>{s}</option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Address */}
-              <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1">
-                  Address
-                </label>
-                <div className="relative rounded-xl shadow-sm">
-                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-stone-400">
-                    <MapPin className="h-4 w-4" />
-                  </div>
-                  <input
-                    type="text"
-                    value={editAddress}
-                    onChange={(e) => setEditAddress(e.target.value)}
-                    className="block w-full pl-9 pr-3 py-2 bg-white border border-[#D8CBB9] rounded-xl text-stone-900 focus:outline-none focus:ring-2 focus:ring-[#8B9A6E] text-xs"
-                  />
-                </div>
-              </div>
-
-              {/* Actions */}
-              <div className="pt-3 border-t border-[#D8CBB9]/80 flex justify-end space-x-2">
-                <button
-                  type="button"
-                  onClick={closeEditModal}
-                  className="px-4 py-2 border border-[#D8CBB9] rounded-xl text-xs font-bold text-stone-700 hover:bg-stone-50 transition"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={isUpdating}
-                  className="px-5 py-2 rounded-xl text-xs font-bold text-white bg-[#5A6644] hover:bg-[#495436] transition shadow disabled:opacity-50"
-                >
-                  {isUpdating ? 'Saving Changes...' : 'Save Changes'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Delete Confirmation Modal */}
-      {deletingClient && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="bg-[#EAE2D6] border border-[#D8CBB9] rounded-3xl p-6 sm:p-7 max-w-md w-full shadow-2xl relative text-center">
-            <div className="w-12 h-12 rounded-2xl bg-red-100 border border-red-200 text-red-600 flex items-center justify-center mx-auto mb-4">
-              <AlertTriangle className="w-6 h-6" />
-            </div>
-
-            <h3 className="text-xl font-bold text-[#2E3523]">Delete Client Profile?</h3>
-            <p className="text-xs text-stone-600 mt-2 leading-relaxed">
-              Are you sure you want to delete <span className="font-bold text-stone-800">"{deletingClient.name}"</span> ({deletingClient.clientId})? 
-              This will permanently remove the partner client from the PostgreSQL database.
-            </p>
-
-            <div className="mt-6 flex justify-center space-x-3">
-              <button
-                type="button"
-                onClick={closeDeleteModal}
-                disabled={isDeleting}
-                className="px-4 py-2.5 border border-[#D8CBB9] rounded-xl text-xs font-bold text-stone-700 hover:bg-stone-50 transition"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleDeleteClient}
-                disabled={isDeleting}
-                className="px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-red-600 hover:bg-red-700 transition shadow disabled:opacity-50 inline-flex items-center space-x-1.5"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>{isDeleting ? 'Deleting...' : 'Yes, Delete Client'}</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
         {/* TAB 6: BILLING (INS-7) */}
         {activeTab === 'billing' && (
           <div className="space-y-6 animate-in fade-in duration-200">
@@ -3790,7 +3610,196 @@ export const AdminDashboard: React.FC = () => {
             </div>
           </div>
         )}
+      </main>
 
+      {/* Edit Client Modal */}
+      {editingClient && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-[#EAE2D6] border border-[#D8CBB9] rounded-3xl p-6 sm:p-8 max-w-lg w-full shadow-2xl relative">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between pb-4 border-b border-[#D8CBB9]/80">
+              <div className="flex items-center space-x-2 text-[#5A6644]">
+                <Pencil className="w-5 h-5" />
+                <h3 className="text-xl font-bold text-[#2E3523]">Edit Client Profile</h3>
+              </div>
+              <button 
+                onClick={closeEditModal} 
+                className="text-stone-500 hover:text-stone-800 p-1 rounded-lg hover:bg-white/60 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {editError && (
+              <div className="mt-4 p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl flex items-center space-x-2">
+                <AlertCircle className="w-4 h-4 flex-shrink-0 text-red-500" />
+                <span>{editError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleUpdateClient} className="mt-5 space-y-4">
+              {/* Client ID (Read-only) */}
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1">
+                  Client ID (Fixed)
+                </label>
+                <div className="relative rounded-xl shadow-sm">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-stone-400">
+                    <Hash className="h-4 w-4" />
+                  </div>
+                  <input
+                    type="text"
+                    readOnly
+                    value={editingClient.clientId}
+                    className="block w-full pl-9 pr-3 py-2 bg-stone-100 border border-[#D8CBB9] rounded-xl text-stone-600 font-mono text-xs cursor-not-allowed font-semibold"
+                  />
+                </div>
+              </div>
+
+              {/* Client Name */}
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1">
+                  Client Name <span className="text-red-500">*</span>
+                </label>
+                <div className="relative rounded-xl shadow-sm">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-stone-400">
+                    <Building2 className="h-4 w-4" />
+                  </div>
+                  <input
+                    type="text"
+                    required
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    className="block w-full pl-9 pr-3 py-2 bg-white border border-[#D8CBB9] rounded-xl text-stone-900 focus:outline-none focus:ring-2 focus:ring-[#8B9A6E] text-xs font-medium"
+                  />
+                </div>
+              </div>
+
+              {/* Business Type & Status */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1">
+                    Business Type
+                  </label>
+                  <select
+                    value={editBusinessType}
+                    onChange={(e) => setEditBusinessType(e.target.value)}
+                    className="block w-full px-3 py-2 bg-white border border-[#D8CBB9] rounded-xl text-stone-900 focus:outline-none focus:ring-2 focus:ring-[#8B9A6E] text-xs font-medium"
+                  >
+                    <option value="Bank">Bank</option>
+                    <option value="Creditunion">Creditunion</option>
+                    <option value="Affinity partner">Affinity partner</option>
+                    <option value="Association">Association</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1">
+                    Status
+                  </label>
+                  <select
+                    value={editStatus}
+                    onChange={(e) => setEditStatus(e.target.value)}
+                    className="block w-full px-3 py-2 bg-white border border-[#D8CBB9] rounded-xl text-stone-900 focus:outline-none focus:ring-2 focus:ring-[#8B9A6E] text-xs font-medium"
+                  >
+                    <option value="A-ACTIVE">A-ACTIVE (Active Partner)</option>
+                    <option value="IA-INACTIVE">IA-INACTIVE (Inactive / Suspended)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* State */}
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1">
+                  State
+                </label>
+                <select
+                  value={editState}
+                  onChange={(e) => setEditState(e.target.value)}
+                  className="block w-full px-3 py-2 bg-white border border-[#D8CBB9] rounded-xl text-stone-900 focus:outline-none focus:ring-2 focus:ring-[#8B9A6E] text-xs font-medium"
+                >
+                  {US_STATES.map((s) => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Address */}
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1">
+                  Address
+                </label>
+                <div className="relative rounded-xl shadow-sm">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-stone-400">
+                    <MapPin className="h-4 w-4" />
+                  </div>
+                  <input
+                    type="text"
+                    value={editAddress}
+                    onChange={(e) => setEditAddress(e.target.value)}
+                    className="block w-full pl-9 pr-3 py-2 bg-white border border-[#D8CBB9] rounded-xl text-stone-900 focus:outline-none focus:ring-2 focus:ring-[#8B9A6E] text-xs"
+                  />
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="pt-3 border-t border-[#D8CBB9]/80 flex justify-end space-x-2">
+                <button
+                  type="button"
+                  onClick={closeEditModal}
+                  className="px-4 py-2 border border-[#D8CBB9] rounded-xl text-xs font-bold text-stone-700 hover:bg-stone-50 transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isUpdating}
+                  className="px-5 py-2 rounded-xl text-xs font-bold text-white bg-[#5A6644] hover:bg-[#495436] transition shadow disabled:opacity-50"
+                >
+                  {isUpdating ? 'Saving Changes...' : 'Save Changes'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {deletingClient && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-[#EAE2D6] border border-[#D8CBB9] rounded-3xl p-6 sm:p-7 max-w-md w-full shadow-2xl relative text-center">
+            <div className="w-12 h-12 rounded-2xl bg-red-100 border border-red-200 text-red-600 flex items-center justify-center mx-auto mb-4">
+              <AlertTriangle className="w-6 h-6" />
+            </div>
+
+            <h3 className="text-xl font-bold text-[#2E3523]">Delete Client Profile?</h3>
+            <p className="text-xs text-stone-600 mt-2 leading-relaxed">
+              Are you sure you want to delete <span className="font-bold text-stone-800">"{deletingClient.name}"</span> ({deletingClient.clientId})? 
+              This will permanently remove the partner client from the PostgreSQL database.
+            </p>
+
+            <div className="mt-6 flex justify-center space-x-3">
+              <button
+                type="button"
+                onClick={closeDeleteModal}
+                disabled={isDeleting}
+                className="px-4 py-2.5 border border-[#D8CBB9] rounded-xl text-xs font-bold text-stone-700 hover:bg-stone-50 transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteClient}
+                disabled={isDeleting}
+                className="px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-red-600 hover:bg-red-700 transition shadow disabled:opacity-50 inline-flex items-center space-x-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>{isDeleting ? 'Deleting...' : 'Yes, Delete Client'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
         {/* BILLING DETAIL MODAL */}
         {selectedBillingRecord && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">

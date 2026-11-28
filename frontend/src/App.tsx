@@ -7,6 +7,7 @@ import { CustomerDashboard } from './pages/CustomerDashboard';
 import { AdminLogin } from './pages/AdminLogin';
 import { AdminSignup } from './pages/AdminSignup';
 import { AdminDashboard } from './pages/AdminDashboard';
+import { OperationsDashboard } from './pages/OperationsDashboard';
 
 // Guard for protected customer routes
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -14,8 +15,10 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) =
   if (!user) {
     return <Navigate to="/login" replace />;
   }
-  // If an Admin/Operator visits customer dashboard, redirect them to admin dashboard
-  if (user.role === 'ADMIN' || user.role === 'OPERATIONS') {
+  if (user.role === 'OPERATIONS') {
+    return <Navigate to="/operations/dashboard" replace />;
+  }
+  if (user.role === 'ADMIN') {
     return <Navigate to="/admin/dashboard" replace />;
   }
   return <>{children}</>;
@@ -33,11 +36,26 @@ const AdminProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children
   return <>{children}</>;
 };
 
+// Guard for operations-specific route
+const OperationsProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { user } = useAuth();
+  if (!user) {
+    return <Navigate to="/admin/login" replace />;
+  }
+  if (user.role !== 'OPERATIONS' && user.role !== 'ADMIN') {
+    return <Navigate to="/dashboard" replace />;
+  }
+  return <>{children}</>;
+};
+
 // Route controller for root
 const RootRedirect: React.FC = () => {
   const { user } = useAuth();
   if (!user) return <Navigate to="/login" replace />;
-  if (user.role === 'ADMIN' || user.role === 'OPERATIONS') {
+  if (user.role === 'OPERATIONS') {
+    return <Navigate to="/operations/dashboard" replace />;
+  }
+  if (user.role === 'ADMIN') {
     return <Navigate to="/admin/dashboard" replace />;
   }
   return <Navigate to="/dashboard" replace />;
@@ -79,6 +97,14 @@ export const App: React.FC = () => {
               <AdminProtectedRoute>
                 <AdminDashboard />
               </AdminProtectedRoute>
+            }
+          />
+          <Route
+            path="/operations/dashboard"
+            element={
+              <OperationsProtectedRoute>
+                <OperationsDashboard />
+              </OperationsProtectedRoute>
             }
           />
 

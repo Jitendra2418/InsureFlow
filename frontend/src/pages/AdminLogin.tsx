@@ -32,7 +32,11 @@ export const AdminLogin: React.FC = () => {
     try {
       const result = await adminLogin(email.trim(), password, activeRole);
       if (result.success) {
-        navigate('/admin/dashboard');
+        if (activeRole === 'OPERATIONS') {
+          navigate('/operations/dashboard');
+        } else {
+          navigate('/admin/dashboard');
+        }
       } else {
         setError(result.error || `Failed to sign in as ${activeRole === 'ADMIN' ? 'Administrator' : 'Operator'}. Please verify credentials.`);
       }
