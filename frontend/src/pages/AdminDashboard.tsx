@@ -642,7 +642,10 @@ export const AdminDashboard: React.FC = () => {
 
   // Re-fetch data every time the active tab changes
   useEffect(() => {
-    if (activeTab === 'campaigns') {
+    if (activeTab === 'clients') {
+      loadClients();
+    } else if (activeTab === 'campaigns') {
+      loadClients();
       loadProducts();
       loadCampaigns();
     } else if (activeTab === 'events') {
