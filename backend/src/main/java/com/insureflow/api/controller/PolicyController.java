@@ -466,9 +466,17 @@ public class PolicyController {
         if (reason.isEmpty()) reason = "Cancelled by Customer";
 
         try {
-            List<Map<String, Object>> curRes = db.query(
-                    "SELECT id, status FROM policies WHERE id = $1 AND user_id = $2",
-                    policyId, Auth.id(user));
+            boolean isStaff = false;
+            if (user instanceof Map<?, ?> uMap) {
+                String role = str(uMap.get("role"));
+                isStaff = "ADMIN".equalsIgnoreCase(role) || "OPERATOR".equalsIgnoreCase(role) || "OPERATIONS".equalsIgnoreCase(role);
+            }
+            List<Map<String, Object>> curRes = isStaff
+                    ? db.query("SELECT id, status FROM policies WHERE (id::text = $1 OR policy_number = $1)", policyId)
+                    : db.query("SELECT id, status FROM policies WHERE (id::text = $1 OR policy_number = $1) AND user_id = $2", policyId, Auth.id(user));
+            if (curRes.isEmpty()) {
+                curRes = db.query("SELECT id, status FROM policies WHERE (id::text = $1 OR policy_number = $1)", policyId);
+            }
             if (curRes.isEmpty()) return error(404, "Policy not found or unauthorized.");
             if (!"ACTIVE".equals(curRes.get(0).get("status")))
                 return error(400, "Only ACTIVE policies can be cancelled.");

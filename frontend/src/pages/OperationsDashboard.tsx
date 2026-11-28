@@ -17,7 +17,6 @@ import {
   Search,
   Building2,
   FileText,
-  ArrowRight,
   AlertCircle
 } from 'lucide-react';
 
@@ -707,21 +706,20 @@ export const OperationsDashboard: React.FC = () => {
                     <th className="py-3 px-4 text-right">Claimed Amount</th>
                     <th className="py-3 px-4 text-center">Documents</th>
                     <th className="py-3 px-4 text-center">Status</th>
-                    <th className="py-3 px-4 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#D8CBB9]/60 text-xs text-stone-800">
                   {isLoading ? (
                     <tr>
-                      <td colSpan={8} className="py-8 text-center text-stone-500">
+                      <td colSpan={7} className="py-8 text-center text-stone-500">
                         <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-[#5A6644]" />
-                        Loading open claims...
+                        Loading claims...
                       </td>
                     </tr>
                   ) : filteredClaims.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="py-8 text-center text-stone-500">
-                        No open claims currently awaiting adjudication!
+                      <td colSpan={7} className="py-8 text-center text-stone-500">
+                        No claims found.
                       </td>
                     </tr>
                   ) : (
@@ -777,23 +775,19 @@ export const OperationsDashboard: React.FC = () => {
                         {/* Status */}
                         <td className="py-3.5 px-4 text-center">
                           <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${
-                            clm.status === 'UNDER_REVIEW'
+                            clm.status === 'APPROVED'
+                              ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                              : clm.status === 'REJECTED'
+                              ? 'bg-red-100 text-red-800 border-red-300'
+                              : clm.status === 'UNDER_REVIEW'
                               ? 'bg-amber-100 text-amber-800 border-amber-300'
                               : 'bg-blue-100 text-blue-800 border-blue-300'
                           }`}>
-                            {clm.status === 'UNDER_REVIEW' ? 'Under Review' : 'Submitted'}
+                            {clm.status === 'UNDER_REVIEW' ? 'Under Review'
+                              : clm.status === 'APPROVED' ? 'Approved'
+                              : clm.status === 'REJECTED' ? 'Rejected'
+                              : 'Submitted'}
                           </span>
-                        </td>
-
-                        {/* Actions */}
-                        <td className="py-3.5 px-4 text-right">
-                          <Link
-                            to="/admin/dashboard"
-                            className="inline-flex items-center space-x-1 px-2.5 py-1 bg-[#5A6644] hover:bg-[#495436] text-white rounded-lg text-xs font-bold transition shadow-xs"
-                          >
-                            <span>Manage in Claims</span>
-                            <ArrowRight className="w-3.5 h-3.5" />
-                          </Link>
                         </td>
                       </tr>
                     ))
