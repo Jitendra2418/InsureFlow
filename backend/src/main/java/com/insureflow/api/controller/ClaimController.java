@@ -132,24 +132,94 @@ public class ClaimController {
         }
     }
 
+    @GetMapping("/api/claims")
+    public ResponseEntity<Object> listCustomerClaims(HttpServletRequest req) {
+        Object user = Auth.user(req);
+        try {
+            List<Map<String, Object>> rows = db.query("""
+                      SELECT
+                        c.id,
+                        c.claim_number AS "claimNumber",
+                        c.policy_id AS "policyId",
+                        p.policy_number AS "policyNumber",
+                        c.user_id AS "userId",
+                        u.first_name AS "insuredFirstName",
+                        u.last_name AS "insuredLastName",
+                        CONCAT(u.first_name, ' ', u.last_name) AS "insuredName",
+                        u.email AS "insuredEmail",
+                        u.phone AS "insuredPhone",
+                        pr.id AS "productId",
+                        pr.name AS "productName",
+                        pr.code AS "productCode",
+                        c.incident_type AS "incidentType",
+                        c.incident_date AS "incidentDate",
+                        c.description,
+                        c.status,
+                        c.claimed_amount AS "claimedAmount",
+                        c.approved_amount AS "approvedAmount",
+                        c.reviewer_notes AS "reviewerNotes",
+                        c.reviewed_at AS "reviewedAt",
+                        c.created_at AS "createdAt",
+                        c.updated_at AS "updatedAt",
+                        COALESCE(
+                          json_agg(
+                            json_build_object(
+                              'id', cd.id,
+                              'fileName', cd.file_name,
+                              's3Key', cd.s3_key,
+                              'contentType', cd.content_type,
+                              'fileSize', cd.file_size,
+                              'uploadedAt', cd.uploaded_at
+                            )
+                          ) FILTER (WHERE cd.id IS NOT NULL),
+                          '[]'::json
+                        ) AS documents
+                      FROM claims c
+                      JOIN policies p ON c.policy_id = p.id
+                      JOIN users u ON c.user_id = u.id
+                      JOIN products pr ON p.product_id = pr.id
+                      LEFT JOIN claim_documents cd ON cd.claim_id = c.id
+                      WHERE c.user_id = $1
+                      GROUP BY c.id, p.policy_number, u.first_name, u.last_name, u.email, u.phone, pr.id, pr.name, pr.code
+                      ORDER BY c.created_at DESC
+                    """, Auth.id(user));
+            return ok(rows);
+        } catch (RuntimeException e) {
+            return dbFail("Error fetching customer claims:", e);
+        }
+    }
+
     @PostMapping("/api/claims")
     public ResponseEntity<Object> submit(HttpServletRequest req, @RequestBody(required = false) String raw) {
         Object b = parseBody(raw);
-        Auth.user(req);
+        Object user = Auth.user(req);
         Object policyId = prop(b, "policyId"), incidentType = prop(b, "incidentType"), incidentDate = prop(b, "incidentDate"),
-                description = prop(b, "description"), claimedAmount = prop(b, "claimedAmount"), documents = prop(b, "documents");
+                description = prop(b, "description"), claimedAmount = prop(b, "claimedAmount"), documents = prop(b, "documents"),
+                claimNumberProp = prop(b, "claimNumber");
 
-        if (!truthy(policyId) || !truthy(incidentType) || !truthy(incidentDate) || !truthy(claimedAmount)) {
-            return error(400, "Policy ID, Incident Type, Incident Date, and Claimed Amount are required.");
+        if (!truthy(policyId) || !truthy(incidentType) || !truthy(incidentDate)) {
+            return error(400, "Policy ID, Incident Type, and Incident Date are required.");
         }
 
         try {
-            List<Map<String, Object>> policyRes = db.query("SELECT * FROM policies WHERE id = $1", policyId);
-            if (policyRes.isEmpty()) return error(404, "Policy not found.");
+            List<Map<String, Object>> policyRes = db.query("SELECT * FROM policies WHERE id = $1 AND user_id = $2", policyId, Auth.id(user));
+            if (policyRes.isEmpty()) return error(404, "Policy not found or unauthorized.");
             Map<String, Object> policy = policyRes.get(0);
 
-            String claimNumber = "CLM-" + numberToString(JsDate.now().getFullYear()) + "-"
-                    + (int) Math.floor(100000 + ThreadLocalRandom.current().nextDouble() * 900000);
+            String claimNumber;
+            if (truthy(claimNumberProp)) {
+                claimNumber = str(claimNumberProp).trim();
+            } else {
+                claimNumber = "CLM-" + numberToString(JsDate.now().getFullYear()) + "-"
+                        + (int) Math.floor(100000 + ThreadLocalRandom.current().nextDouble() * 900000);
+            }
+
+            double numClaimedAmount;
+            if (truthy(claimedAmount)) {
+                numClaimedAmount = parseFloat(claimedAmount);
+            } else {
+                numClaimedAmount = parseFloat(policy.get("cover_amount"));
+            }
 
             Map<String, Object> createdClaim = db.query("""
                       INSERT INTO claims (
@@ -160,7 +230,7 @@ public class ClaimController {
                       RETURNING *
                     """,
                     policyId, policy.get("user_id"), claimNumber, incidentType, incidentDate, or(description, null),
-                    parseFloat(claimedAmount)).get(0);
+                    numClaimedAmount).get(0);
 
             List<Object> insertedDocs = new ArrayList<>();
             if (documents instanceof List<?> docs && !docs.isEmpty()) {
