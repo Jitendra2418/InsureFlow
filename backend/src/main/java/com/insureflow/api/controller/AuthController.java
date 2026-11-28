@@ -121,6 +121,58 @@ public class AuthController {
         }
     }
 
+    @PostMapping("/api/auth/reset-password")
+    public ResponseEntity<Object> resetPassword(@RequestBody(required = false) String raw) {
+        Object b = parseBody(raw);
+        Object identifier = or(prop(b, "identifier"), prop(b, "email"));
+        Object dateOfBirth = prop(b, "dateOfBirth");
+        Object newPassword = prop(b, "newPassword");
+
+        if (!truthy(identifier) || !truthy(newPassword)) {
+            return error(400, "Email/Aadhaar number and new password are required.");
+        }
+
+        String passStr = str(newPassword);
+        if (passStr.length() < 8) {
+            return error(400, "New password must be at least 8 characters long.");
+        }
+
+        try {
+            String rawInput = trim(identifier, "identifier");
+            String cleanDigits = rawInput.replaceAll("(?U)[\\s-]", "");
+
+            List<Map<String, Object>> result = db.query(
+                    "SELECT * FROM users WHERE (email = $1 OR aadhar_number = $2) AND role = 'CUSTOMER'",
+                    lower(rawInput), cleanDigits);
+
+            if (result.isEmpty()) {
+                return error(404, "No customer account found with that Email or Aadhaar Number.");
+            }
+
+            Map<String, Object> user = result.get(0);
+
+            if (truthy(dateOfBirth)) {
+                Object dbDob = user.get("date_of_birth");
+                if (dbDob != null) {
+                    String dbDobStr = dbDob.toString().substring(0, Math.min(10, dbDob.toString().length()));
+                    String inputDobStr = str(dateOfBirth).substring(0, Math.min(10, str(dateOfBirth).length()));
+                    if (!dbDobStr.equals(inputDobStr)) {
+                        return error(400, "Identity verification failed: The Date of Birth does not match our records.");
+                    }
+                }
+            }
+
+            String passwordHash = hashPassword(newPassword);
+            db.query("UPDATE users SET password_hash = $1 WHERE id = $2", passwordHash, user.get("id"));
+
+            return ok(obj(
+                    "success", true,
+                    "message", "Password reset successfully. You can now sign in with your new password."));
+        } catch (RuntimeException e) {
+            return dbFail("Error during password reset:", e);
+        }
+    }
+
     @PostMapping("/api/auth/admin/register")
     public ResponseEntity<Object> adminRegister(@RequestBody(required = false) String raw) {
         Object b = parseBody(raw);

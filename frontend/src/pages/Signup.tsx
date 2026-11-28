@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Shield, Lock, Mail, User, Phone, Calendar, ArrowRight, AlertCircle, UserCheck, CheckCircle2, CreditCard } from 'lucide-react';
+import { Shield, Lock, Mail, User, Phone, Calendar, ArrowRight, AlertCircle, UserCheck, CheckCircle2, CreditCard, Eye, EyeOff } from 'lucide-react';
 
 export const Signup: React.FC = () => {
   const { signup } = useAuth();
@@ -15,10 +15,25 @@ export const Signup: React.FC = () => {
   const [dateOfBirth, setDateOfBirth] = useState<string>('');
   const [password, setPassword] = useState<string>('');
   const [confirmPassword, setConfirmPassword] = useState<string>('');
+  const [showPassword, setShowPassword] = useState<boolean>(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState<boolean>(false);
   const [agreeTerms, setAgreeTerms] = useState<boolean>(false);
+
+  const dateInputRef = useRef<HTMLInputElement>(null);
 
   const [error, setError] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
+
+  // Safe local date formatting for underwriting bounds (18 to 69 years old)
+  const today = new Date();
+  const formatYMD = (d: Date) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+  const maxDate = formatYMD(new Date(today.getFullYear() - 18, today.getMonth(), today.getDate()));
+  const minDate = formatYMD(new Date(today.getFullYear() - 69, today.getMonth(), today.getDate()));
 
   // Aadhaar validation & formatting
   const cleanAadhar = aadharNumber.replace(/[\s-]/g, '');
@@ -277,17 +292,36 @@ export const Signup: React.FC = () => {
                     Date of Birth
                   </label>
                   <div className="relative rounded-xl shadow-sm">
-                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-stone-400">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        try {
+                          dateInputRef.current?.showPicker?.();
+                        } catch {
+                          dateInputRef.current?.focus();
+                        }
+                      }}
+                      className="absolute inset-y-0 left-0 pl-3.5 flex items-center text-stone-400 hover:text-[#8B9A6E] transition-colors focus:outline-none"
+                      tabIndex={-1}
+                      title="Open calendar picker"
+                    >
                       <Calendar className="h-4 w-4" />
-                    </div>
+                    </button>
                     <input
+                      ref={dateInputRef}
                       type="date"
                       required
                       value={dateOfBirth}
                       onChange={(e) => setDateOfBirth(e.target.value)}
-                      max={new Date(new Date().setFullYear(new Date().getFullYear() - 18)).toISOString().split('T')[0]}
-                      min={new Date(new Date().setFullYear(new Date().getFullYear() - 69)).toISOString().split('T')[0]}
-                      className={`block w-full pl-10 pr-3 py-2.5 bg-white border rounded-xl text-stone-900 focus:outline-none focus:ring-2 text-sm ${
+                      onClick={(e) => {
+                        try {
+                          (e.currentTarget as HTMLInputElement).showPicker?.();
+                        } catch {}
+                      }}
+                      max={maxDate}
+                      min={minDate}
+                      style={{ colorScheme: 'light' }}
+                      className={`block w-full pl-10 pr-3 py-2.5 bg-white border rounded-xl text-stone-900 focus:outline-none focus:ring-2 text-sm cursor-pointer ${
                         ageInvalid
                           ? 'border-red-400 focus:ring-red-400'
                           : ageValid
@@ -306,7 +340,7 @@ export const Signup: React.FC = () => {
                     </p>
                   )}
                   {age === null && (
-                    <p className="text-[10px] text-stone-500 mt-1">Underwriting rule: Age 18–69 required</p>
+                    <p className="text-[10px] text-stone-500 mt-1">Underwriting rule: Age 18–69 required (click to select)</p>
                   )}
                 </div>
 
@@ -340,13 +374,22 @@ export const Signup: React.FC = () => {
                       <Lock className="h-4 w-4" />
                     </div>
                     <input
-                      type="password"
+                      type={showPassword ? 'text' : 'password'}
                       required
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       placeholder="Min 8 characters"
-                      className="block w-full pl-10 pr-3 py-2.5 bg-white border border-[#D8CBB9] rounded-xl text-stone-900 placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-[#8B9A6E] text-sm"
+                      className="block w-full pl-10 pr-10 py-2.5 bg-white border border-[#D8CBB9] rounded-xl text-stone-900 placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-[#8B9A6E] text-sm"
                     />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute inset-y-0 right-0 pr-3 flex items-center text-stone-400 hover:text-stone-700 transition-colors focus:outline-none"
+                      tabIndex={-1}
+                      title={showPassword ? 'Hide password' : 'Show password'}
+                    >
+                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
                   </div>
                 </div>
                 <div>
@@ -358,12 +401,12 @@ export const Signup: React.FC = () => {
                       <Lock className="h-4 w-4" />
                     </div>
                     <input
-                      type="password"
+                      type={showConfirmPassword ? 'text' : 'password'}
                       required
                       value={confirmPassword}
                       onChange={(e) => setConfirmPassword(e.target.value)}
                       placeholder="Confirm password"
-                      className={`block w-full pl-10 pr-3 py-2.5 bg-white border rounded-xl text-stone-900 placeholder-stone-400 focus:outline-none focus:ring-2 text-sm ${
+                      className={`block w-full pl-10 pr-10 py-2.5 bg-white border rounded-xl text-stone-900 placeholder-stone-400 focus:outline-none focus:ring-2 text-sm ${
                         confirmPassword && password !== confirmPassword
                           ? 'border-red-400 focus:ring-red-400'
                           : confirmPassword && password === confirmPassword
@@ -371,6 +414,15 @@ export const Signup: React.FC = () => {
                           : 'border-[#D8CBB9] focus:ring-[#8B9A6E]'
                       }`}
                     />
+                    <button
+                      type="button"
+                      onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                      className="absolute inset-y-0 right-0 pr-3 flex items-center text-stone-400 hover:text-stone-700 transition-colors focus:outline-none"
+                      tabIndex={-1}
+                      title={showConfirmPassword ? 'Hide password' : 'Show password'}
+                    >
+                      {showConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
                   </div>
                   {confirmPassword && password !== confirmPassword && (
                     <p className="text-[11px] text-red-600 mt-1 flex items-center space-x-1">
