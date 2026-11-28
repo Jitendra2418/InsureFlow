@@ -4,6 +4,7 @@ import { Navbar } from '../components/Navbar';
 import { EnrollmentModal } from '../components/EnrollmentModal';
 import { EditPolicyModal } from '../components/EditPolicyModal';
 import { PolicyDetailsModal } from '../components/PolicyDetailsModal';
+import { CancellationModal } from '../components/CancellationModal';
 import { Policy } from '../types';
 import { generateInsuranceCertificate } from '../utils/pdfCertificate';
 import { 
@@ -18,9 +19,11 @@ export const CustomerDashboard: React.FC = () => {
   const [isEnrollModalOpen, setIsEnrollModalOpen] = useState<boolean>(false);
   const [editingPolicy, setEditingPolicy] = useState<Policy | null>(null);
   const [viewingPolicy, setViewingPolicy] = useState<Policy | null>(null);
+  const [cancellingPolicy, setCancellingPolicy] = useState<Policy | null>(null);
   const [justEnrolledNumber, setJustEnrolledNumber] = useState<string | null>(null);
   const [downloadNotice, setDownloadNotice] = useState<string | null>(null);
   const [updateNotice, setUpdateNotice] = useState<string | null>(null);
+  const [cancelNotice, setCancelNotice] = useState<string | null>(null);
 
   // Quick Stats
   const activePolicies = policies.filter(p => p.status === 'ACTIVE');
@@ -32,6 +35,17 @@ export const CustomerDashboard: React.FC = () => {
     setTimeout(() => {
       setJustEnrolledNumber(null);
     }, 8000);
+  };
+
+  const handlePolicyCancelled = (policyId: string) => {
+    cancelPolicy(policyId);
+    const cancelled = policies.find((p) => p.id === policyId);
+    setCancelNotice(
+      cancelled
+        ? `Policy #${cancelled.policyNumber} has been cancelled and removed from your active coverage.`
+        : 'Policy has been successfully cancelled.'
+    );
+    setTimeout(() => setCancelNotice(null), 8000);
   };
 
   const scrollToPolicies = () => {
@@ -61,6 +75,27 @@ export const CustomerDashboard: React.FC = () => {
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
         
+        {/* Policy Cancelled Notice */}
+        {cancelNotice && (
+          <div className="p-4 bg-red-50 border border-red-300 rounded-2xl flex items-center justify-between shadow-sm animate-fade-in">
+            <div className="flex items-center space-x-3">
+              <div className="w-10 h-10 rounded-xl bg-red-600 text-white flex items-center justify-center">
+                <ShieldAlert className="w-6 h-6" />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-red-900">Policy Cancelled</h4>
+                <p className="text-xs text-red-700 font-medium">{cancelNotice}</p>
+              </div>
+            </div>
+            <button
+              onClick={() => setCancelNotice(null)}
+              className="text-red-700 hover:text-red-900 text-xs font-bold underline"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+
         {/* Policy Successfully Updated Notice */}
         {updateNotice && (
           <div className="p-4 bg-emerald-50 border border-emerald-300 rounded-2xl flex items-center justify-between shadow-sm animate-fade-in">
@@ -363,11 +398,7 @@ export const CustomerDashboard: React.FC = () => {
 
                     {policy.status === 'ACTIVE' && (
                       <button
-                        onClick={() => {
-                          if (confirm(`Are you sure you want to cancel policy #${policy.policyNumber}?`)) {
-                            cancelPolicy(policy.id);
-                          }
-                        }}
+                        onClick={() => setCancellingPolicy(policy)}
                         className="text-xs font-semibold text-stone-400 hover:text-red-600 transition py-1 px-2 cursor-pointer"
                       >
                         Cancel Policy
@@ -541,6 +572,14 @@ export const CustomerDashboard: React.FC = () => {
         policy={viewingPolicy}
         onClose={() => setViewingPolicy(null)}
         onEditPolicy={(p) => setEditingPolicy(p)}
+      />
+
+      {/* Cancellation Confirmation Modal (INS-21) */}
+      <CancellationModal
+        isOpen={!!cancellingPolicy}
+        policy={cancellingPolicy}
+        onClose={() => setCancellingPolicy(null)}
+        onCancelled={handlePolicyCancelled}
       />
     </div>
   );

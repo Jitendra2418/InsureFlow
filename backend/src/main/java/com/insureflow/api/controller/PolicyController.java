@@ -418,17 +418,45 @@ public class PolicyController {
     }
 
     @DeleteMapping("/api/policies/{id}")
-    public ResponseEntity<Object> cancel(HttpServletRequest req, @PathVariable("id") String policyId) {
+    public ResponseEntity<Object> cancel(HttpServletRequest req, @PathVariable("id") String policyId,
+                                         @RequestBody(required = false) String raw) {
         Object user = Auth.user(req);
+        Object body = parseBody(raw);
+        Object reasonProp = prop(body, "cancellationReason");
+        String reason = (truthy(reasonProp)) ? str(reasonProp).trim() : "Cancelled by Customer";
+        if (reason.isEmpty()) reason = "Cancelled by Customer";
+
         try {
-            List<Map<String, Object>> updateRes = db.query("""
-                      UPDATE policies
-                      SET status = 'CANCELLED', cancellation_date = CURRENT_DATE, cancellation_reason = 'Cancelled by Customer'
-                      WHERE id = $1 AND user_id = $2
-                      RETURNING *
-                    """, policyId, Auth.id(user));
-            if (updateRes.isEmpty()) return error(404, "Policy not found or unauthorized.");
-            return ok(obj("message", "Policy successfully cancelled in database.", "policyId", policyId));
+            List<Map<String, Object>> curRes = db.query(
+                    "SELECT id, status FROM policies WHERE id = $1 AND user_id = $2",
+                    policyId, Auth.id(user));
+            if (curRes.isEmpty()) return error(404, "Policy not found or unauthorized.");
+            if (!"ACTIVE".equals(curRes.get(0).get("status")))
+                return error(400, "Only ACTIVE policies can be cancelled.");
+
+            Db.Tx tx = db.begin();
+            try (tx) {
+                tx.query("""
+                          UPDATE policies
+                          SET status = 'CANCELLED', cancellation_date = CURRENT_DATE, cancellation_reason = $1,
+                              updated_at = CURRENT_TIMESTAMP
+                          WHERE id = $2 AND user_id = $3
+                        """, reason, policyId, Auth.id(user));
+
+                tx.queryQuietly("Cancellation audit log warning:", """
+                          INSERT INTO policy_audit_logs (policy_id, changed_by_user_id, action, old_value, new_value)
+                          VALUES ($1, $2, 'POLICY_CANCELLED', $3, $4)
+                        """, policyId, Auth.id(user),
+                        stringify(obj("status", "ACTIVE")),
+                        stringify(obj("status", "CANCELLED", "cancellationReason", reason)));
+
+                tx.commit();
+            } catch (RuntimeException e) {
+                return fail("Error in cancellation transaction:", "Failed to cancel policy: ", e);
+            }
+
+            return ok(obj("message", "Policy successfully cancelled.", "policyId", policyId,
+                    "cancellationReason", reason));
         } catch (RuntimeException e) {
             return dbFail("Error cancelling policy:", e);
         }
