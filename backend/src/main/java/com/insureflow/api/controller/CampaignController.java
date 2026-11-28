@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -106,7 +107,16 @@ public class CampaignController {
                     """,
                     clientId, productId, finalCampaignId, campaignName, or(description, null), selectedStatus, startDate, endDate);
 
-            return json(201, obj("message", "Campaign \"" + finalCampaignId + "\" successfully created.", "campaign", first(result)));
+            Map<String, Object> created = result.isEmpty() ? null : result.get(0);
+            if (created != null && created.get("id") != null) {
+                db.query("""
+                    INSERT INTO campaign_codes (campaign_id, code)
+                    VALUES ($1, $2)
+                    ON CONFLICT (code) DO NOTHING
+                """, created.get("id"), str(created.get("campaignId")).toUpperCase(Locale.ROOT));
+            }
+
+            return json(201, obj("message", "Campaign \"" + finalCampaignId + "\" successfully created.", "campaign", created));
         } catch (RuntimeException e) {
             return dbFail("Error creating campaign:", e);
         }
