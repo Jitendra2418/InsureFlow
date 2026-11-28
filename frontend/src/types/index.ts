@@ -229,3 +229,94 @@ export interface Claim {
   updatedAt: string;
   documents: ClaimDocument[];
 }
+
+export interface CampaignEnrollmentMetric {
+  campaignId: string;
+  campaignCode: string;
+  campaignName: string;
+  status: string;
+  startDate?: string;
+  endDate?: string;
+  clientName: string;
+  clientCode: string;
+  productName: string;
+  productCode: string;
+  enrollmentCount: number;
+  totalCoverSum: number | string;
+  totalMonthlyPremium: number | string;
+}
+
+export interface SegmentResponseRateMetric {
+  segmentId: string;
+  segmentName: string;
+  spokenKey: string;
+  insuranceStatus: 'I' | 'UI' | string;
+  state: string;
+  targetCount: number;
+  clientName: string;
+  clientCode: string;
+  eventCode: string;
+  campaignCode: string;
+  campaignName: string;
+  enrolledCount: number;
+  responseRate: number;
+}
+
+export interface ActivePolicyMetric {
+  id: string;
+  policyNumber: string;
+  coverAmount: number | string;
+  monthlyPremium: number | string;
+  status: string;
+  effectiveDate: string;
+  city: string;
+  state: string;
+  zipCode: string;
+  createdAt: string;
+  customerFirstName: string;
+  customerLastName: string;
+  customerName: string;
+  customerEmail: string;
+  customerPhone?: string;
+  productName: string;
+  productCode: string;
+  campaignCode?: string;
+}
+
+export interface OpenClaimMetric {
+  id: string;
+  claimNumber: string;
+  policyId: string;
+  policyNumber: string;
+  incidentType: string;
+  incidentDate: string;
+  description?: string;
+  status: ClaimStatus;
+  claimedAmount: number | string;
+  createdAt: string;
+  insuredFirstName: string;
+  insuredLastName: string;
+  insuredName: string;
+  insuredEmail: string;
+  insuredPhone?: string;
+  productName: string;
+  productCode: string;
+  documentsCount: number;
+}
+
+export interface OperationsKpis {
+  totalActivePolicies: number;
+  totalOpenClaims: number;
+  totalEnrollments: number;
+  avgResponseRate: number;
+  totalCampaigns: number;
+  totalSegments: number;
+}
+
+export interface OperationsMetricsResponse {
+  kpis: OperationsKpis;
+  campaignEnrollments: CampaignEnrollmentMetric[];
+  segmentResponseRates: SegmentResponseRateMetric[];
+  activePolicies: ActivePolicyMetric[];
+  openClaims: OpenClaimMetric[];
+}

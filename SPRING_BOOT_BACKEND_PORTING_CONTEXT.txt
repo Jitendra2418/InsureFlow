@@ -1,0 +1,684 @@
+# ==============================================================================
+# INSUREFLOW BACKEND SPECIFICATION & SPRING BOOT MIGRATION CONTEXT
+# Target Tech Stack: Java 21, Spring Boot 3.3.x, Spring Data JPA / Hibernate,
+#                    Spring Security 6 (JWT Filter), Flyway, PostgreSQL, Lombok
+# ==============================================================================
+
+PROJECT OVERVIEW:
+InsureFlow is an enterprise multi-tenant insurance enrollment, campaign management,
+and operations platform. The React frontend is completely built and connects to
+the backend API under `/api`.
+Currently, the backend was implemented in Node.js/Express (`backend/server.js` and
+`backend/billing-worker.js`).
+TASK: Port the entire Node.js backend to a clean, idiomatic Java Spring Boot 3 backend
+without breaking ANY existing endpoint contract, request/response JSON structure,
+status code, authentication header, or database schema.
+
+--------------------------------------------------------------------------------
+1. GLOBAL CONFIGURATION & PORTS
+--------------------------------------------------------------------------------
+- Server Port: 8080 (Context Path: `/api` or server root with `/api` mappings)
+  NOTE: Frontend fetch calls use `/api/...` (e.g. `/api/auth/login`, `/api/admin/clients`).
+  Either configure:
+    server.port=8080
+    (or server.servlet.context-path=/api if controllers don't include /api prefix)
+- Database: PostgreSQL (Port: 5433 or 5432 via application.properties)
+    spring.datasource.url=jdbc:postgresql://localhost:5433/insureflow
+    spring.datasource.username=insureflow_user
+    spring.datasource.password=your_db_password
+- CORS:
+    Allow origins: http://localhost:5173, http://localhost:3000 (React Vite app)
+    Allowed methods: GET, POST, PUT, PATCH, DELETE, OPTIONS
+    Allowed headers: *
+    Allow credentials: true
+
+--------------------------------------------------------------------------------
+2. DATABASE SCHEMA (POSTGRESQL + FLYWAY)
+--------------------------------------------------------------------------------
+PostgreSQL extension: `uuid-ossp`
+Primary Keys: UUID throughout all tables.
+
+Tables:
+1. `users`
+   - id UUID PRIMARY KEY DEFAULT uuid_generate_v4()
+   - email VARCHAR(255) UNIQUE NOT NULL
+   - password_hash VARCHAR(255) NOT NULL
+   - first_name VARCHAR(100) NOT NULL
+   - last_name VARCHAR(100) NOT NULL
+   - date_of_birth DATE
+   - phone VARCHAR(30)
+   - role VARCHAR(30) NOT NULL DEFAULT 'CUSTOMER'  ('CUSTOMER', 'ADMIN', 'OPERATIONS')
+   - created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+   - updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+
+2. `clients` (Banks / Institutions)
+   - id UUID PRIMARY KEY DEFAULT uuid_generate_v4()
+   - name VARCHAR(255) NOT NULL
+   - code VARCHAR(50) UNIQUE NOT NULL
+   - contact_email VARCHAR(255)
+   - is_active BOOLEAN DEFAULT TRUE
+   - business_type VARCHAR(100) DEFAULT 'Bank'
+   - status VARCHAR(30) DEFAULT 'A-ACTIVE'
+   - address TEXT
+   - state VARCHAR(100)
+   - created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+
+3. `products`
+   - id UUID PRIMARY KEY DEFAULT uuid_generate_v4()
+   - name VARCHAR(255) NOT NULL
+   - code VARCHAR(10) UNIQUE NOT NULL ('DD' for AD&D, 'HP', 'RC')
+   - description TEXT
+   - status VARCHAR(30) NOT NULL DEFAULT 'ACTIVE'
+   - free_basic_enabled BOOLEAN DEFAULT FALSE
+   - free_basic_min DECIMAL(12, 2) DEFAULT 0.00
+   - free_basic_max DECIMAL(12, 2) DEFAULT 0.00
+   - premium_rate_per_thousand DECIMAL(6, 2) DEFAULT 0.60
+   - created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+
+4. `campaigns`
+   - id UUID PRIMARY KEY DEFAULT uuid_generate_v4()
+   - client_id UUID REFERENCES clients(id) ON DELETE CASCADE
+   - product_id UUID REFERENCES products(id) ON DELETE CASCADE
+   - campaign_id VARCHAR(100) UNIQUE NOT NULL (e.g. CAMP-XXXXXX)
+   - name VARCHAR(255) NOT NULL
+   - description TEXT
+   - status VARCHAR(30) NOT NULL DEFAULT 'PLANNED' ('PLANNED', 'ACTIVE', 'INACTIVE')
+   - start_date DATE
+   - end_date DATE
+   - created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+
+5. `campaign_events`
+   - id UUID PRIMARY KEY DEFAULT uuid_generate_v4()
+   - campaign_id UUID REFERENCES campaigns(id) ON DELETE CASCADE
+   - event_id VARCHAR(100) UNIQUE NOT NULL (e.g. EVT-XXXXXX)
+   - channel VARCHAR(50) NOT NULL ('Telemarketting', 'Banner', 'Collection', 'Letter', 'NewsLetter')
+   - media VARCHAR(50) DEFAULT 'direct mail'
+   - send_date DATE
+   - quantity INT DEFAULT 0
+   - event_type VARCHAR(100) DEFAULT 'mailing'
+   - final_description TEXT
+   - created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+
+6. `segments`
+   - id UUID PRIMARY KEY DEFAULT uuid_generate_v4()
+   - event_id UUID REFERENCES campaign_events(id) ON DELETE CASCADE
+   - client_id UUID REFERENCES clients(id) ON DELETE CASCADE
+   - name VARCHAR(255) NOT NULL
+   - spoken_key VARCHAR(100) NOT NULL (Format: {insuranceStatus}-{clientCode}-{stateCode}, e.g. UI-APEX-TX)
+   - insurance_status VARCHAR(10) NOT NULL ('I' for Insured, 'UI' for Uninsured)
+   - state VARCHAR(50) NOT NULL
+   - target_count INT DEFAULT 0
+   - description TEXT
+   - created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+
+7. `campaign_codes`
+   - id UUID PRIMARY KEY DEFAULT uuid_generate_v4()
+   - campaign_id UUID REFERENCES campaigns(id) ON DELETE CASCADE
+   - code VARCHAR(100) UNIQUE NOT NULL
+   - is_used BOOLEAN DEFAULT FALSE
+   - used_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL
+   - used_at TIMESTAMPTZ
+   - created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+
+8. `policies`
+   - id UUID PRIMARY KEY DEFAULT uuid_generate_v4()
+   - user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE
+   - product_id UUID NOT NULL REFERENCES products(id) ON DELETE RESTRICT
+   - campaign_code_id UUID REFERENCES campaign_codes(id) ON DELETE SET NULL
+   - policy_number VARCHAR(100) UNIQUE NOT NULL (e.g. POL-YYYY-XXXXX)
+   - cover_amount DECIMAL(12, 2) NOT NULL
+   - monthly_premium DECIMAL(10, 2) NOT NULL ((coverAmount / 1000) * 0.60)
+   - status VARCHAR(30) NOT NULL DEFAULT 'ACTIVE' ('ACTIVE', 'CANCELLED', 'LAPSED')
+   - effective_date DATE NOT NULL DEFAULT CURRENT_DATE
+   - cancellation_date DATE
+   - cancellation_reason VARCHAR(255)
+   - address_line1 VARCHAR(255) NOT NULL
+   - address_line2 VARCHAR(255)
+   - city VARCHAR(100) NOT NULL
+   - state VARCHAR(50) NOT NULL
+   - zip_code VARCHAR(20) NOT NULL
+   - certificate_s3_key VARCHAR(255)
+   - created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+   - updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+
+9. `beneficiaries`
+   - id UUID PRIMARY KEY DEFAULT uuid_generate_v4()
+   - policy_id UUID NOT NULL REFERENCES policies(id) ON DELETE CASCADE
+   - first_name VARCHAR(100) NOT NULL
+   - last_name VARCHAR(100) NOT NULL
+   - relationship VARCHAR(50) NOT NULL
+   - percentage DECIMAL(5, 2) NOT NULL
+   - phone VARCHAR(30)
+   - is_primary BOOLEAN DEFAULT TRUE
+   - guardian_name VARCHAR(100)
+   - is_active BOOLEAN DEFAULT TRUE
+   - created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+
+10. `policy_audit_logs`
+   - id UUID PRIMARY KEY DEFAULT uuid_generate_v4()
+   - policy_id UUID NOT NULL REFERENCES policies(id) ON DELETE CASCADE
+   - changed_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL
+   - action VARCHAR(100) NOT NULL
+   - old_value JSONB
+   - new_value JSONB
+   - changed_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+
+11. `claims`
+   - id UUID PRIMARY KEY DEFAULT uuid_generate_v4()
+   - policy_id UUID NOT NULL REFERENCES policies(id) ON DELETE CASCADE
+   - user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE
+   - claim_number VARCHAR(100) UNIQUE NOT NULL (e.g. CLM-YYYY-XXXXXX)
+   - incident_type VARCHAR(100) NOT NULL
+   - incident_date DATE NOT NULL
+   - description TEXT
+   - status VARCHAR(30) NOT NULL DEFAULT 'SUBMITTED' ('SUBMITTED', 'UNDER_REVIEW', 'APPROVED', 'REJECTED')
+   - claimed_amount DECIMAL(12, 2) NOT NULL
+   - approved_amount DECIMAL(12, 2)
+   - reviewer_notes TEXT
+   - reviewed_by UUID REFERENCES users(id) ON DELETE SET NULL
+   - reviewed_at TIMESTAMPTZ
+   - created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+   - updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+
+12. `claim_documents`
+   - id UUID PRIMARY KEY DEFAULT uuid_generate_v4()
+   - claim_id UUID NOT NULL REFERENCES claims(id) ON DELETE CASCADE
+   - file_name VARCHAR(255) NOT NULL
+   - s3_key VARCHAR(255) NOT NULL
+   - content_type VARCHAR(100)
+   - file_size BIGINT
+   - uploaded_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+
+13. `premium_records`
+   - id UUID PRIMARY KEY DEFAULT uuid_generate_v4()
+   - policy_id UUID NOT NULL REFERENCES policies(id) ON DELETE CASCADE
+   - billing_month DATE NOT NULL (first day of month, e.g. 2026-11-01)
+   - amount DECIMAL(10, 2) NOT NULL
+   - status VARCHAR(30) NOT NULL DEFAULT 'PENDING' ('PENDING', 'PAID', 'FAILED', 'RETRY_SCHEDULED')
+   - retry_count INT DEFAULT 0
+   - payment_attempt_count INT DEFAULT 0
+   - last_attempted_at TIMESTAMPTZ
+   - due_date TIMESTAMPTZ
+   - paid_at TIMESTAMPTZ
+   - created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+
+14. `payment_retry_queue`
+   - id UUID PRIMARY KEY DEFAULT uuid_generate_v4()
+   - premium_record_id UUID NOT NULL REFERENCES premium_records(id) ON DELETE CASCADE
+   - retry_number INT NOT NULL (1, 2, or 3)
+   - scheduled_at TIMESTAMPTZ NOT NULL (Day 3, Day 7, Day 14 after billing generation)
+   - attempted_at TIMESTAMPTZ
+   - result TEXT
+   - created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+
+--------------------------------------------------------------------------------
+3. AUTHENTICATION & SECURITY SPECIFICATION
+--------------------------------------------------------------------------------
+- Password Hashing: BCryptPasswordEncoder (strength 10 or 12).
+- JWT Tokens:
+  - Header: Authorization: Bearer <token>
+  - Claims in token:
+      {
+        "id": "uuid-string",
+        "email": "user@example.com",
+        "role": "CUSTOMER" | "ADMIN" | "OPERATIONS",
+        "firstName": "John",
+        "lastName": "Doe"
+      }
+  - Secret: Configurable via `jwt.secret` (minimum 256-bit key for HMAC-SHA256).
+  - Expiration: 24 hours.
+- Roles & Access:
+  - CUSTOMER: can access customer policy endpoints (`/api/policies`, `/api/claims`, `/api/enrollment/**`).
+  - ADMIN, OPERATIONS: staff access to `/api/admin/**`.
+
+--------------------------------------------------------------------------------
+4. EXACT API ENDPOINT SPECIFICATION
+--------------------------------------------------------------------------------
+
+A. HEALTH:
+- GET `/api/health`
+  Response:
+  {
+    "status": "UP",
+    "timestamp": "ISO-8601",
+    "database": { "connected": true, "userCount": 3 }
+  }
+
+B. AUTHENTICATION:
+- POST `/api/auth/register`
+  Request: { email, password, firstName, lastName, dateOfBirth, phone }
+  Response 201:
+  {
+    "message": "User registered successfully",
+    "token": "jwt...",
+    "user": { "id", "email", "firstName", "lastName", "role": "CUSTOMER" }
+  }
+
+- POST `/api/auth/login`
+  Request: { email, password }
+  Response 200:
+  {
+    "message": "Login successful",
+    "token": "jwt...",
+    "user": { "id", "email", "firstName", "lastName", "role": "CUSTOMER" }
+  }
+
+- POST `/api/auth/admin/register`
+  Request: { email, password, firstName, lastName, phone, role } (role default: ADMIN)
+  Response 201: token + user object
+
+- POST `/api/auth/admin/login`
+  Request: { email, password }
+  Validation: Must have role ADMIN or OPERATIONS (reject CUSTOMER with 403 Forbidden).
+  Response 200: token + user object
+
+C. CLIENT MANAGEMENT (Staff Only):
+- GET `/api/admin/clients`
+  Response: Array of Client DTOs:
+  [{
+    "id": "uuid",
+    "name": "Apex Trust Bank",
+    "clientId": "CLI-XXXXXX",
+    "code": "APEX-BANK",
+    "businessType": "Bank",
+    "status": "A-ACTIVE",
+    "address": "...",
+    "state": "Texas",
+    "contactEmail": "...",
+    "isActive": true,
+    "createdAt": "..."
+  }]
+
+- POST `/api/admin/clients`
+  Request: { name, code, businessType, status, address, state, contactEmail }
+  Response 201: { "message": "...", "client": { ... } }
+
+- PUT `/api/admin/clients/:id`
+  Request: { name, code, businessType, status, address, state, contactEmail }
+  Response 200: { "message": "...", "client": { ... } }
+
+- DELETE `/api/admin/clients/:id`
+  Response 200: { "message": "Client deleted successfully." }
+
+D. PRODUCTS:
+- GET `/api/products` and GET `/api/admin/products`
+  Response 200: Array of Products:
+  [{
+    "id": "uuid",
+    "name": "Accidental Death & Dismemberment",
+    "code": "DD",
+    "description": "...",
+    "status": "ACTIVE",
+    "premiumRatePerThousand": 0.60
+  }]
+
+E. CAMPAIGN MANAGEMENT (Staff Only):
+- GET `/api/admin/campaigns`
+  Returns all campaigns joined with client and product, plus count of associated events.
+  Response:
+  [{
+    "id": "uuid",
+    "campaignId": "CAMP-XXXXXX",
+    "name": "Fall Campaign",
+    "description": "...",
+    "clientId": "uuid",
+    "clientName": "Apex Trust Bank",
+    "productId": "uuid",
+    "productName": "Accidental Death & Dismemberment",
+    "productCode": "DD",
+    "status": "ACTIVE",
+    "startDate": "YYYY-MM-DD",
+    "endDate": "YYYY-MM-DD",
+    "eventsCount": 2,
+    "createdAt": "..."
+  }]
+
+- POST `/api/admin/campaigns`
+  Request: { campaignId, name, description, clientId, productId, startDate, endDate, status }
+  Automatically creates a default campaign code in `campaign_codes` matching the campaign.
+  Response 201: { "message": "...", "campaign": { ... } }
+
+F. CAMPAIGN EVENTS (Staff Only):
+- GET `/api/admin/events`
+  Returns events joined with campaign, client, and product + segmentsCount and allocatedTarget.
+  Response:
+  [{
+    "id": "uuid",
+    "campaignId": "uuid",
+    "eventId": "EVT-XXXXXX",
+    "channel": "Letter",
+    "media": "direct mail",
+    "scheduledDrop": "YYYY-MM-DD",
+    "finalDescription": "...",
+    "eventType": "mailing",
+    "quantity": 10000,
+    "campaignCode": "CAMP-XXXXXX",
+    "campaignName": "Fall Campaign",
+    "clientName": "Apex Trust Bank",
+    "productName": "AD&D",
+    "segmentsCount": 1,
+    "allocatedTarget": 5000,
+    "createdAt": "..."
+  }]
+
+- POST `/api/admin/events`
+  Request: { campaignId, eventId, channel, media, scheduledDrop, quantity, eventType, finalDescription }
+  Response 201: { "message": "...", "event": { ... } }
+
+G. SEGMENTS (Staff Only):
+- GET `/api/admin/segments/customer-stats`
+  Calculates:
+  - `insuredCount`: total users who have at least one policy in `policies`
+  - `uninsuredCount`: users with role='CUSTOMER' who have 0 policies
+  - `totalCustomers`: total users with role='CUSTOMER'
+  Response 200: { "insuredCount": 1, "uninsuredCount": 2, "totalCustomers": 3 }
+
+- GET `/api/admin/segments`
+  Returns segments joined with campaign event, campaign, and client.
+  Response:
+  [{
+    "id": "uuid",
+    "eventId": "uuid",
+    "name": "...",
+    "insuranceStatus": "UI",
+    "clientId": "uuid",
+    "clientName": "Apex Trust Bank",
+    "clientCode": "APEX",
+    "state": "Texas",
+    "spokenKey": "UI-APEX-TX",
+    "target": 5000,
+    "description": "...",
+    "eventCode": "EVT-XXXXXX",
+    "eventQuantity": 10000,
+    "campaignCode": "CAMP-XXXXXX",
+    "createdAt": "..."
+  }]
+
+- POST `/api/admin/segments`
+  Request: { eventId, insuranceStatus, clientId, target, description }
+  Validation Rules:
+  1. Spoken key is generated automatically:
+     Format: `{insuranceStatus}-{clientCode}-{stateCode}` (e.g. `UI-APEX-TX`)
+  2. Target Sum Validation: Sum of `target` for all segments belonging to the same `eventId`
+     MUST NOT exceed the event's `quantity`. Return 400 Bad Request if it exceeds.
+  Response 201: { "message": "Segment created successfully.", "segment": { ... } }
+
+H. CLAIMS MANAGEMENT (Staff Only for Review / Customers for Submit):
+- GET `/api/admin/claims?status={ALL|SUBMITTED|UNDER_REVIEW|APPROVED|REJECTED}`
+  Returns all claims joined with `policies`, `users`, `products`, and aggregated array of `documents`.
+  Response:
+  [{
+    "id": "uuid",
+    "claimNumber": "CLM-2026-104921",
+    "policyId": "uuid",
+    "policyNumber": "POL-2026-88412",
+    "userId": "uuid",
+    "insuredName": "Jitendra Chowdary",
+    "insuredEmail": "jitendra@insureflow.com",
+    "insuredPhone": "+1-555-0101",
+    "productId": "uuid",
+    "productName": "Accidental Death & Dismemberment",
+    "incidentType": "Accidental Fracture",
+    "incidentDate": "2026-11-24",
+    "description": "...",
+    "status": "SUBMITTED",
+    "claimedAmount": 1850.00,
+    "approvedAmount": null,
+    "reviewerNotes": null,
+    "reviewedAt": null,
+    "createdAt": "...",
+    "documents": [
+      {
+        "id": "uuid",
+        "fileName": "Hospital_Discharge_Summary.pdf",
+        "s3Key": "claims/uuid/Hospital_Discharge_Summary.pdf",
+        "contentType": "application/pdf",
+        "fileSize": 245760,
+        "uploadedAt": "..."
+      }
+    ]
+  }]
+
+- PATCH `/api/admin/claims/:id/status`
+  Request: { status: "UNDER_REVIEW" | "APPROVED" | "REJECTED", reviewerNotes, approvedAmount }
+  Logic:
+  - If status == 'APPROVED' and approvedAmount is null, defaults to claimedAmount.
+  - If status == 'REJECTED', approvedAmount = 0.
+  - Updates `reviewed_by` to authenticated staff user id and `reviewed_at` to CURRENT_TIMESTAMP.
+  Response 200: { "message": "Claim status successfully updated...", "claim": { ... } }
+
+- POST `/api/claims` (Authenticated customer submits claim)
+  Request: { policyId, incidentType, incidentDate, description, claimedAmount, documents: [{ fileName, s3Key, contentType, fileSize }] }
+  Generates claim_number: `CLM-{YEAR}-{RANDOM_6_DIGITS}`
+  Inserts into `claims` and child records in `claim_documents`.
+  Response 201: { "message": "Claim submitted successfully.", "claim": { ... } }
+
+I. ENROLLMENT & POLICIES (Customer):
+- POST `/api/enrollment/validate-code`
+  Request: { "code": "ADD-FALL-2026" }
+  Checks `campaign_codes` where code = ? AND is_used = false.
+  Response 200: { "valid": true, "code": "ADD-FALL-2026", "campaign": { ... } }
+  If invalid: { "valid": false, "error": "Invalid or expired campaign code." }
+
+- POST `/api/enrollment/enroll`
+  Request:
+  {
+    "campaignCode": "ADD-FALL-2026",
+    "coverAmount": 100000,
+    "addressLine1": "123 Main St",
+    "addressLine2": "Apt 4B",
+    "city": "Austin",
+    "state": "Texas",
+    "zipCode": "78701",
+    "beneficiaries": [
+      {
+        "firstName": "Jane",
+        "lastName": "Doe",
+        "relationship": "Spouse",
+        "percentage": 100,
+        "phone": "+1-555-0199",
+        "isPrimary": true,
+        "guardianName": ""
+      }
+    ]
+  }
+  Logic:
+  1. Calculates monthly premium: `(coverAmount / 1000) * 0.60`.
+  2. Generates policyNumber: `POL-{YEAR}-{RANDOM_5_DIGITS}`.
+  3. Inserts into `policies` with user_id = authenticated user.
+  4. Inserts all beneficiaries into `beneficiaries`.
+  5. Marks campaign_code `is_used = true`, `used_by_user_id = user.id`, `used_at = NOW()`.
+  6. Inserts initial audit log into `policy_audit_logs`.
+  Response 201: { "message": "Enrollment successful.", "policy": { "policyNumber": "POL-..." } }
+
+- GET `/api/policies`
+  Returns all policies for the authenticated customer with nested `beneficiaries` array.
+  Response:
+  [{
+    "id": "uuid",
+    "policyNumber": "POL-2026-88412",
+    "coverAmount": 100000.0,
+    "monthlyPremium": 60.0,
+    "status": "ACTIVE",
+    "effectiveDate": "2026-11-27",
+    "productName": "Accidental Death & Dismemberment",
+    "productCode": "DD",
+    "beneficiaries": [...]
+  }]
+
+- GET `/api/policies/:id`
+  Returns single policy with full details and active beneficiaries.
+
+- PUT `/api/policies/:id`
+  Updates address information (`addressLine1`, `addressLine2`, `city`, `state`, `zipCode`).
+  Writes entry to `policy_audit_logs`.
+
+- PUT `/api/policies/:id/beneficiaries`
+  Replaces or updates beneficiary designations with 100% allocation check.
+  Writes entry to `policy_audit_logs`.
+
+- DELETE `/api/policies/:id`
+  Soft cancels policy: updates status = 'CANCELLED', cancellation_date = CURRENT_DATE,
+  cancellation_reason = 'Cancelled by Customer'.
+
+J. MONTHLY BILLING & RETRY QUEUE (Ticket INS-7):
+- GET `/api/admin/billing?status={ALL|PAID|PENDING|RETRY_SCHEDULED|FAILED}&search={query}`
+  Returns all `premium_records` joined with `policies`, `users`, `products`, and aggregated array
+  of `retryHistory` from `payment_retry_queue`.
+  Fields returned per record:
+  - id, billingMonth, amount, status, retryCount, dueDate, paidAt, createdAt
+  - policyId, policyNumber, coverAmount, monthlyPremium, effectiveDate
+  - addressLine1, addressLine2, city, state, zipCode
+  - userId, firstName, lastName, customerName, customerEmail, customerPhone
+  - productName
+  - retryHistory: [{ id, retryNumber, scheduledAt, attemptedAt, result }]
+
+- GET `/api/admin/billing/stats`
+  Response:
+  {
+    "paid": 1,
+    "pending": 0,
+    "failed": 0,
+    "retryScheduled": 1,
+    "totalCollected": 45.00,
+    "totalOutstanding": 45.00,
+    "totalPolicies": 1
+  }
+
+- POST `/api/admin/billing/trigger`
+  Manually triggers the monthly billing generation and initial charge phase.
+  Response: { "message": "Billing run triggered successfully.", "generated": { created, skipped }, "charged": { paid, failed } }
+
+- POST `/api/admin/billing/retry`
+  Manually triggers due retry charges from `payment_retry_queue`.
+  Response: { "message": "Retry job triggered successfully.", "result": { retryPaid, retryFailed } }
+
+- POST `/api/admin/billing/:id/send-reminder`
+  Sends mock payment reminder email to customer.
+  Response:
+  {
+    "message": "Payment reminder email sent to user@example.com",
+    "recipient": { "name": "...", "email": "..." },
+    "policyNumber": "...",
+    "amount": 45.00,
+    "billingMonth": "November 2026",
+    "sentAt": "ISO-8601"
+  }
+
+--------------------------------------------------------------------------------
+5. BILLING WORKER & PAYMENT GATEWAY SCHEDULER
+--------------------------------------------------------------------------------
+In Spring Boot, implement this using `@Scheduled` and Spring service components:
+
+1. `MockPaymentGateway`:
+   - Simulates 70% success, 30% failure rate.
+   - On success: returns `transactionId` ("TXN-timestamp-random").
+   - On failure: returns failure reason ('Insufficient funds', 'Card declined by issuer',
+     'Payment gateway timeout', 'Invalid account details', 'Transaction limit exceeded').
+
+2. `BillingService`:
+   - `generateMonthlyPremiumRecords(Date date)`:
+     Queries all policies with `status = 'ACTIVE'`.
+     Creates a `premium_records` row with `billing_month = YYYY-MM-01`, `status = 'PENDING'`,
+     `due_date = month_start + 7 days`, `amount = policy.monthly_premium`.
+     Skips if a record for that `policy_id` and `billing_month` already exists.
+   - `processPendingCharges()`:
+     Charges each PENDING record via `MockPaymentGateway`.
+     If Success -> updates `status = 'PAID'`, `paid_at = NOW()`.
+     If Failure -> updates `status = 'RETRY_SCHEDULED'`, creates 3 rows in `payment_retry_queue`:
+       - Attempt #1: scheduled at NOW + 3 days
+       - Attempt #2: scheduled at NOW + 7 days
+       - Attempt #3: scheduled at NOW + 14 days
+   - `processDueRetries()`:
+     Finds queue entries where `scheduled_at <= NOW()` and `attempted_at IS NULL`.
+     Charges record. If success, marks `PAID`. If failed 3 times (0 remaining retries),
+     marks status permanently as `FAILED`. Note: Policy is NOT lapsed or suspended.
+
+3. Spring `@Scheduled` Schedulers:
+   - Monthly Billing: `@Scheduled(cron = "0 5 0 1 * ?")` (1st of every month at 00:05 AM)
+   - Daily Retry Evaluation: `@Scheduled(cron = "0 0 6 * * ?")` (Every day at 06:00 AM)
+
+--------------------------------------------------------------------------------
+6. ENTITY RELATIONSHIP DIAGRAM (JPA ENTITY MAPPINGS)
+--------------------------------------------------------------------------------
+- `User` 1 --- * `Policy`
+- `Client` 1 --- * `Campaign`
+- `Product` 1 --- * `Campaign`
+- `Product` 1 --- * `Policy`
+- `Campaign` 1 --- * `CampaignEvent`
+- `Campaign` 1 --- * `CampaignCode`
+- `CampaignEvent` 1 --- * `Segment`
+- `Policy` 1 --- * `Beneficiary`
+- `Policy` 1 --- * `PolicyAuditLog`
+- `Policy` 1 --- * `Claim`
+- `Policy` 1 --- * `PremiumRecord`
+- `Claim` 1 --- * `ClaimDocument`
+- `PremiumRecord` 1 --- * `PaymentRetryQueue`
+
+--------------------------------------------------------------------------------
+7. RECOMMENDED SPRING BOOT PACKAGE STRUCTURE
+--------------------------------------------------------------------------------
+com.insureflow
+ ├── InsureFlowApplication.java
+ ├── config
+ │    ├── SecurityConfig.java
+ │    ├── JwtAuthFilter.java
+ │    ├── JwtTokenProvider.java
+ │    └── CorsConfig.java
+ ├── controller
+ │    ├── AuthController.java
+ │    ├── AdminClientController.java
+ │    ├── AdminCampaignController.java
+ │    ├── AdminEventController.java
+ │    ├── AdminSegmentController.java
+ │    ├── AdminClaimController.java
+ │    ├── AdminBillingController.java
+ │    ├── PolicyController.java
+ │    ├── EnrollmentController.java
+ │    └── ProductController.java
+ ├── model / entity
+ │    ├── User.java
+ │    ├── Client.java
+ │    ├── Product.java
+ │    ├── Campaign.java
+ │    ├── CampaignEvent.java
+ │    ├── Segment.java
+ │    ├── CampaignCode.java
+ │    ├── Policy.java
+ │    ├── Beneficiary.java
+ │    ├── PolicyAuditLog.java
+ │    ├── Claim.java
+ │    ├── ClaimDocument.java
+ │    ├── PremiumRecord.java
+ │    └── PaymentRetryQueue.java
+ ├── repository
+ │    ├── UserRepository.java
+ │    ├── ClientRepository.java
+ │    ├── ProductRepository.java
+ │    ├── CampaignRepository.java
+ │    ├── CampaignEventRepository.java
+ │    ├── SegmentRepository.java
+ │    ├── CampaignCodeRepository.java
+ │    ├── PolicyRepository.java
+ │    ├── BeneficiaryRepository.java
+ │    ├── ClaimRepository.java
+ │    ├── ClaimDocumentRepository.java
+ │    ├── PremiumRecordRepository.java
+ │    └── PaymentRetryQueueRepository.java
+ ├── service
+ │    ├── AuthService.java
+ │    ├── PolicyService.java
+ │    ├── EnrollmentService.java
+ │    ├── CampaignService.java
+ │    ├── ClaimService.java
+ │    ├── BillingService.java
+ │    ├── MockPaymentGateway.java
+ │    └── BillingScheduler.java
+ └── dto
+      ├── AuthRequest.java
+      ├── AuthResponse.java
+      ├── EnrollmentRequest.java
+      ├── ClaimStatusUpdateRequest.java
+      ├── BillingStatsDto.java
+      └── ...
+# ==============================================================================
