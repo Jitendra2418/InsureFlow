@@ -183,20 +183,59 @@ public class PolicyController {
         Object spokenKey = prop(b, "spokenKey");
         if (!truthy(code)) return json(400, obj("valid", false, "error", "Campaign code is required."));
 
+        String cleanCode = trim(code, "code").toUpperCase(Locale.ROOT);
+        String cleanSpokenKey = truthy(spokenKey) ? trim(spokenKey, "spokenKey").toUpperCase(Locale.ROOT) : "";
+
         try {
+            // 1. Look up campaign: match campaigns.campaign_id, campaign_codes.code, or campaigns.name
             List<Map<String, Object>> result = db.query("""
-                      SELECT cc.*, c.name as campaign_name, pr.name as product_name, pr.code as product_code
-                      FROM campaign_codes cc
-                      JOIN campaigns c ON cc.campaign_id = c.id
+                      SELECT c.id as campaign_id, c.campaign_id as campaign_code, c.name as campaign_name,
+                             pr.name as product_name, pr.code as product_code
+                      FROM campaigns c
                       JOIN products pr ON c.product_id = pr.id
-                      WHERE cc.code = $1
-                    """, trim(code, "code").toUpperCase(Locale.ROOT));
+                      LEFT JOIN campaign_codes cc ON cc.campaign_id = c.id
+                      WHERE UPPER(c.campaign_id) = $1 OR UPPER(c.name) = $1 OR (cc.code IS NOT NULL AND UPPER(cc.code) = $1)
+                      ORDER BY c.created_at DESC
+                      LIMIT 1
+                    """, cleanCode);
 
             if (result.isEmpty()) {
                 return json(404, obj("valid", false, "error", "Campaign code does not exist. Check code and try again."));
             }
+
             Map<String, Object> r = result.get(0);
-            return ok(obj("valid", true, "code", r.get("code"), "spokenKey", spokenKey, "campaignName", r.get("campaign_name"),
+            Object campaignId = r.get("campaign_id");
+
+            // 2. If spoken key is provided, validate it against segments
+            if (!cleanSpokenKey.isEmpty()) {
+                List<Map<String, Object>> segRes = db.query("""
+                          SELECT s.id, s.spoken_key, s.insurance_status, s.name as segment_name
+                          FROM segments s
+                          JOIN campaign_events ce ON s.event_id = ce.id
+                          WHERE UPPER(s.spoken_key) = $1
+                          LIMIT 1
+                        """, cleanSpokenKey);
+
+                if (segRes.isEmpty()) {
+                    return json(404, obj("valid", false, "error", "Spoken key \"" + cleanSpokenKey + "\" does not exist. Check spoken key and try again."));
+                }
+
+                // Ensure spoken key is registered in campaign_codes for tracking
+                db.query("""
+                    INSERT INTO campaign_codes (campaign_id, code)
+                    VALUES ($1, $2)
+                    ON CONFLICT (code) DO NOTHING
+                """, campaignId, cleanSpokenKey);
+            }
+
+            // Ensure campaign code itself is also registered in campaign_codes
+            db.query("""
+                INSERT INTO campaign_codes (campaign_id, code)
+                VALUES ($1, $2)
+                ON CONFLICT (code) DO NOTHING
+            """, campaignId, cleanCode);
+
+            return ok(obj("valid", true, "code", r.get("campaign_code"), "spokenKey", cleanSpokenKey.isEmpty() ? null : cleanSpokenKey, "campaignName", r.get("campaign_name"),
                     "productName", r.get("product_name"), "productCode", r.get("product_code")));
         } catch (RuntimeException e) {
             System.err.println("Error validating campaign code: " + e);

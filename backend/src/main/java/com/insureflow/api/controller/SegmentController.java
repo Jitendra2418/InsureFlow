@@ -102,7 +102,7 @@ public class SegmentController {
 
         try {
             List<Map<String, Object>> eventRes = db.query("""
-                      SELECT ce.id, ce.event_id, ce.quantity, c.name as campaign_name
+                      SELECT ce.id, ce.event_id, ce.quantity, ce.campaign_id, c.name as campaign_name
                       FROM campaign_events ce
                       JOIN campaigns c ON ce.campaign_id = c.id
                       WHERE ce.id = $1
@@ -166,6 +166,15 @@ public class SegmentController {
                         created_at AS "createdAt"
                     """,
                     eventId, segmentName, insuranceStatus, clientId, clientState, spokenKey, parsedTarget, or(description, null)));
+
+            // Ensure spokenKey is registered in campaign_codes for tracking
+            if (event.get("campaign_id") != null) {
+                db.query("""
+                    INSERT INTO campaign_codes (campaign_id, code)
+                    VALUES ($1, $2)
+                    ON CONFLICT (code) DO NOTHING
+                """, event.get("campaign_id"), spokenKey.toUpperCase(Locale.ROOT));
+            }
 
             Map<String, Object> enriched = new LinkedHashMap<>();
             if (createdSegment instanceof Map<?, ?> s) s.forEach((k, v) -> enriched.put((String) k, v));
