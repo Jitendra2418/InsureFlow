@@ -158,11 +158,10 @@ public class OperationsController {
                 JOIN users u ON c.user_id = u.id
                 JOIN products pr ON p.product_id = pr.id
                 LEFT JOIN claim_documents cd ON cd.claim_id = c.id
-                WHERE c.status IN ('SUBMITTED', 'UNDER_REVIEW')
                 GROUP BY c.id, c.claim_number, c.policy_id, p.policy_number, c.incident_type, c.incident_date,
                          c.description, c.status, c.claimed_amount, c.created_at, u.first_name, u.last_name,
                          u.email, u.phone, pr.name, pr.code
-                ORDER BY c.created_at ASC
+                ORDER BY c.created_at DESC
             """);
 
             // 5. Aggregate Summary KPIs

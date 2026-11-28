@@ -63,6 +63,7 @@ public final class Startup {
             // Ensure payment_retry_queue table exists (idempotent)
             try {
                 db.query(RETRY_TABLE);
+                try { db.query("ALTER TABLE payment_retry_queue ALTER COLUMN result TYPE TEXT"); } catch (Db.DbError ignored) {}
                 try { db.query("ALTER TABLE premium_records ADD COLUMN IF NOT EXISTS payment_attempt_count INT DEFAULT 0"); } catch (Db.DbError ignored) { /* as server.js */ }
                 try { db.query("ALTER TABLE premium_records ADD COLUMN IF NOT EXISTS last_attempted_at TIMESTAMPTZ"); } catch (Db.DbError ignored) { /* as server.js */ }
             } catch (Db.DbError e) {
