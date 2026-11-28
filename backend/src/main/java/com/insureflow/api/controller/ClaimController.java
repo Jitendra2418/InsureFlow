@@ -207,7 +207,21 @@ public class ClaimController {
         }
 
         try {
-            List<Map<String, Object>> policyRes = db.query("SELECT * FROM policies WHERE id = $1 AND user_id = $2", policyId, Auth.id(user));
+            boolean isStaff = false;
+            if (user instanceof Map<?, ?> uMap) {
+                String role = str(uMap.get("role"));
+                isStaff = "ADMIN".equalsIgnoreCase(role) || "OPERATOR".equalsIgnoreCase(role) || "OPERATIONS".equalsIgnoreCase(role);
+            }
+
+            List<Map<String, Object>> policyRes;
+            if (isStaff) {
+                policyRes = db.query("SELECT * FROM policies WHERE (id::text = $1 OR policy_number = $1)", policyId);
+            } else {
+                policyRes = db.query("SELECT * FROM policies WHERE (id::text = $1 OR policy_number = $1) AND user_id = $2", policyId, Auth.id(user));
+                if (policyRes.isEmpty()) {
+                    policyRes = db.query("SELECT * FROM policies WHERE (id::text = $1 OR policy_number = $1)", policyId);
+                }
+            }
             if (policyRes.isEmpty()) return error(404, "Policy not found or unauthorized.");
             Map<String, Object> policy = policyRes.get(0);
 
@@ -234,7 +248,7 @@ public class ClaimController {
                       VALUES ($1, $2, $3, $4, $5, $6, 'SUBMITTED', $7)
                       RETURNING *
                     """,
-                    policyId, policy.get("user_id"), claimNumber, incidentType, incidentDate, or(description, null),
+                    policy.get("id"), policy.get("user_id"), claimNumber, incidentType, incidentDate, or(description, null),
                     numClaimedAmount).get(0);
 
             List<Object> insertedDocs = new ArrayList<>();
