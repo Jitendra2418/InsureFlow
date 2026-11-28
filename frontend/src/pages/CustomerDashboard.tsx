@@ -1,17 +1,19 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Navbar } from '../components/Navbar';
 import { EnrollmentModal } from '../components/EnrollmentModal';
 import { EditPolicyModal } from '../components/EditPolicyModal';
 import { PolicyDetailsModal } from '../components/PolicyDetailsModal';
 import { CancellationModal } from '../components/CancellationModal';
-import { Policy } from '../types';
+import { ClaimInsuranceModal } from '../components/ClaimInsuranceModal';
+import { Policy, Claim } from '../types';
+import { apiRequest } from '../api';
 import { generateInsuranceCertificate } from '../utils/pdfCertificate';
 import { 
   ShieldCheck, FileText, Download, CheckCircle, 
   Calendar, Users, ArrowUpRight, 
   Sparkles, Layers, DollarSign, Clock, ShieldAlert,
-  Edit3, MapPin, Eye
+  Edit3, MapPin, Eye, FileCheck2
 } from 'lucide-react';
 
 export const CustomerDashboard: React.FC = () => {
@@ -20,10 +22,30 @@ export const CustomerDashboard: React.FC = () => {
   const [editingPolicy, setEditingPolicy] = useState<Policy | null>(null);
   const [viewingPolicy, setViewingPolicy] = useState<Policy | null>(null);
   const [cancellingPolicy, setCancellingPolicy] = useState<Policy | null>(null);
+  const [claimingPolicy, setClaimingPolicy] = useState<Policy | null>(null);
+  const [claims, setClaims] = useState<Claim[]>([]);
   const [justEnrolledNumber, setJustEnrolledNumber] = useState<string | null>(null);
   const [downloadNotice, setDownloadNotice] = useState<string | null>(null);
   const [updateNotice, setUpdateNotice] = useState<string | null>(null);
   const [cancelNotice, setCancelNotice] = useState<string | null>(null);
+  const [claimNotice, setClaimNotice] = useState<string | null>(null);
+
+  // Fetch customer claims from backend
+  useEffect(() => {
+    let isMounted = true;
+    const fetchClaims = async () => {
+      try {
+        const data = await apiRequest<Claim[]>('/claims');
+        if (isMounted) setClaims(data);
+      } catch (err) {
+        console.error('Failed to load customer claims:', err);
+      }
+    };
+    fetchClaims();
+    return () => {
+      isMounted = false;
+    };
+  }, [policies]);
 
   // Quick Stats
   const activePolicies = policies.filter(p => p.status === 'ACTIVE');
@@ -75,6 +97,27 @@ export const CustomerDashboard: React.FC = () => {
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
         
+        {/* Claim Registered Notice */}
+        {claimNotice && (
+          <div className="p-4 bg-emerald-50 border border-emerald-300 rounded-2xl flex items-center justify-between shadow-sm animate-fade-in">
+            <div className="flex items-center space-x-3">
+              <div className="w-10 h-10 rounded-xl bg-[#5A6644] text-white flex items-center justify-center">
+                <FileCheck2 className="w-6 h-6" />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-emerald-950">Claim Notice Filed</h4>
+                <p className="text-xs text-emerald-800 font-medium">{claimNotice}</p>
+              </div>
+            </div>
+            <button
+              onClick={() => setClaimNotice(null)}
+              className="text-emerald-800 hover:text-emerald-950 text-xs font-bold underline"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+
         {/* Policy Cancelled Notice */}
         {cancelNotice && (
           <div className="p-4 bg-red-50 border border-red-300 rounded-2xl flex items-center justify-between shadow-sm animate-fade-in">
@@ -271,7 +314,9 @@ export const CustomerDashboard: React.FC = () => {
             </div>
           ) : (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {policies.map((policy) => (
+              {policies.map((policy) => {
+                const policyClaim = claims.find((c) => c.policyId === policy.id);
+                return (
                 <div
                   key={policy.id}
                   className="bg-white rounded-3xl p-6 border border-[#EAE2D6] shadow-sm hover:shadow-md transition-all flex flex-col justify-between"
@@ -298,13 +343,31 @@ export const CustomerDashboard: React.FC = () => {
                         </div>
                       </button>
 
-                      <span className={`px-2.5 py-1 rounded-full text-xs font-bold tracking-wide ${
-                        policy.status === 'ACTIVE'
-                          ? 'bg-[#8B9A6E]/15 text-[#5A6644] border border-[#8B9A6E]/30'
-                          : 'bg-stone-200 text-stone-600'
-                      }`}>
-                        {policy.status}
-                      </span>
+                      <div className="flex items-center space-x-2">
+                        {policyClaim && (
+                          <button
+                            type="button"
+                            onClick={() => setClaimingPolicy(policy)}
+                            className={`px-2.5 py-1 rounded-full text-xs font-bold tracking-wide transition border cursor-pointer ${
+                              policyClaim.status === 'APPROVED'
+                                ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                : policyClaim.status === 'REJECTED'
+                                ? 'bg-red-100 text-red-800 border-red-300'
+                                : 'bg-amber-100 text-amber-800 border-amber-300'
+                            }`}
+                            title="Click to view claim details and status"
+                          >
+                            Claim: {policyClaim.status}
+                          </button>
+                        )}
+                        <span className={`px-2.5 py-1 rounded-full text-xs font-bold tracking-wide ${
+                          policy.status === 'ACTIVE'
+                            ? 'bg-[#8B9A6E]/15 text-[#5A6644] border border-[#8B9A6E]/30'
+                            : 'bg-stone-200 text-stone-600'
+                        }`}>
+                          {policy.status}
+                        </span>
+                      </div>
                     </div>
 
                     {/* Coverage & Premium Grid */}
@@ -394,6 +457,21 @@ export const CustomerDashboard: React.FC = () => {
                           <span>Edit</span>
                         </button>
                       )}
+
+                      {policy.status === 'ACTIVE' && (
+                        <button
+                          type="button"
+                          onClick={() => setClaimingPolicy(policy)}
+                          className={`inline-flex items-center space-x-1.5 text-xs font-bold px-3 py-2 rounded-xl transition border shadow-xs cursor-pointer ${
+                            policyClaim
+                              ? 'bg-[#EAE2D6] hover:bg-[#D8CBB9] text-[#2E3523] border-[#8B9A6E]'
+                              : 'bg-white hover:bg-[#F7F2EB] text-[#5A6644] hover:text-[#2E3523] border-[#8B9A6E]'
+                          }`}
+                        >
+                          <FileCheck2 className="w-3.5 h-3.5 text-[#8B9A6E]" />
+                          <span>{policyClaim ? 'View Claim Status' : 'Claim Insurance'}</span>
+                        </button>
+                      )}
                     </div>
 
                     {policy.status === 'ACTIVE' && (
@@ -406,7 +484,8 @@ export const CustomerDashboard: React.FC = () => {
                     )}
                   </div>
                 </div>
-              ))}
+              );
+            })}
             </div>
           )}
         </section>
@@ -580,6 +659,19 @@ export const CustomerDashboard: React.FC = () => {
         policy={cancellingPolicy}
         onClose={() => setCancellingPolicy(null)}
         onCancelled={handlePolicyCancelled}
+      />
+
+      {/* Claim Insurance Modal */}
+      <ClaimInsuranceModal
+        isOpen={!!claimingPolicy}
+        policy={claimingPolicy}
+        existingClaim={claims.find((c) => c.policyId === claimingPolicy?.id) || null}
+        onClose={() => setClaimingPolicy(null)}
+        onClaimSubmitted={(newClaim) => {
+          setClaims((prev) => [newClaim, ...prev.filter((c) => c.id !== newClaim.id)]);
+          setClaimNotice(`Claim #${newClaim.claimNumber} successfully registered! Status: SUBMITTED for Operations Review.`);
+          setTimeout(() => setClaimNotice(null), 10000);
+        }}
       />
     </div>
   );
